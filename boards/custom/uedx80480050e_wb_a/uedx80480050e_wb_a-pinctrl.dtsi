@@ -41,14 +41,14 @@
 
 	lcd_cam_rgb_default: lcd_cam_rgb_default {
 		group1 {
-			/* Blue: B0...B4 */
+			/* Blue: B0-B4 */
 			pinmux = <LCD_CAM_DATA_OUT0_GPIO8>,
 				 <LCD_CAM_DATA_OUT1_GPIO3>,
 				 <LCD_CAM_DATA_OUT2_GPIO46>,
 				 <LCD_CAM_DATA_OUT3_GPIO9>,
 				 <LCD_CAM_DATA_OUT4_GPIO1>,
 
-				 /* Green: G0...G5 */
+				 /* Green: G0-G5 */
 				 <LCD_CAM_DATA_OUT5_GPIO5>,
 				 <LCD_CAM_DATA_OUT6_GPIO6>,
 				 <LCD_CAM_DATA_OUT7_GPIO7>,
@@ -56,7 +56,7 @@
 				 <LCD_CAM_DATA_OUT9_GPIO16>,
 				 <LCD_CAM_DATA_OUT10_GPIO4>,
 
-				 /* Red: R0...R4 */
+				 /* Red: R0-R4 */
 				 <LCD_CAM_DATA_OUT11_GPIO45>,
 				 <LCD_CAM_DATA_OUT12_GPIO48>,
 				 <LCD_CAM_DATA_OUT13_GPIO47>,
