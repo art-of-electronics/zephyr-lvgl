@@ -1,7 +1,3 @@
-/*
- * SPDX-License-Identifier: Apache-2.0
- */
-
 #include "lcd_rgb_poc.h"
 
 #include <errno.h>
@@ -22,6 +18,12 @@
 #include <hal/lcd_hal.h>
 #include <hal/lcd_ll.h>
 #include <soc/gdma_struct.h>
+
+#include <zephyr/drivers/pinctrl.h>
+
+#define LCD_CAM_NODE DT_NODELABEL(lcd_cam)
+
+PINCTRL_DT_DEFINE(LCD_CAM_NODE);
 
 LOG_MODULE_REGISTER(lcd_rgb_poc, LOG_LEVEL_INF);
 
@@ -88,6 +90,21 @@ static dma_descriptor_t __aligned(4)
 static struct dma_block_config lcd_dma_setup_block;
 static struct dma_config lcd_dma_config;
 
+static int lcd_pinctrl_init(void)
+{
+    const struct pinctrl_dev_config *pcfg =
+        PINCTRL_DT_DEV_CONFIG_GET(LCD_CAM_NODE);
+
+    int ret = pinctrl_apply_state(pcfg, PINCTRL_STATE_DEFAULT);
+
+    if (ret < 0) {
+        LOG_ERR("Failed to apply LCD_CAM pinctrl: %d", ret);
+        return ret;
+    }
+
+    LOG_INF("LCD_CAM RGB pinctrl applied");
+    return 0;
+}
 
 static int lcd_clock_init(struct lcd_rgb_poc_data *data)
 {
@@ -362,6 +379,11 @@ int lcd_rgb_poc_init(void)
 	int ret;
 
 	LOG_INF("Initializing ESP32-S3 LCD_CAM RGB proof of concept");
+
+	ret = lcd_pinctrl_init();
+	if (ret < 0) {
+    	return ret;
+	}
 
 	ret = lcd_cam_init(&lcd_data);
 	if (ret < 0) {

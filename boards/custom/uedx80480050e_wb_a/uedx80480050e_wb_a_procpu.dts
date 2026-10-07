@@ -5,6 +5,7 @@
 /dts-v1/;
 
 #include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/pwm/pwm.h>
 #include <espressif/esp32s3/esp32s3_wroom_n16r8.dtsi>
 #include <espressif/partitions_0x0_amp_16M.dtsi>
 #include "uedx80480050e_wb_a-pinctrl.dtsi"
@@ -27,6 +28,7 @@
 		sw0 = &button;
 		watchdog0 = &wdt0;
 		sdhc0 = &sd0;
+		backlight-pwm = &lcd_backlight;
 	};
 
 	keys: keys {
@@ -40,12 +42,12 @@
 		};
 	};
 
-	lcd_backlight_en: lcd-backlight-en {
-		compatible = "regulator-fixed";
-		regulator-name = "lcd_backlight_enable";
-		enable-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
-		regulator-boot-on;
-	};
+	lcd_backlight: lcd-backlight {
+    compatible = "pwm-leds";
+    backlight {
+        pwms = <&ledc0 0 PWM_HZ(250) PWM_POLARITY_NORMAL>;
+    };
+};
 };
 
 &dma {
@@ -148,4 +150,16 @@
 
 zephyr_udc0: &usb_otg {
 	status = "okay";
+};
+
+&ledc0 {
+    status = "okay";
+    pinctrl-0 = <&backlight_pwm_default>;
+    pinctrl-names = "default";
+    #address-cells = <1>;
+    #size-cells = <0>;
+    channel0@0 {
+        reg = <0>;
+        timer = <0>;
+    };
 };

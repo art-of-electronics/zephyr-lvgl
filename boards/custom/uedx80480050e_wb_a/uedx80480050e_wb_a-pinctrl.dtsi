@@ -73,4 +73,11 @@
 			bias-disable;
 		};
 	};
+
+	backlight_pwm_default: backlight_pwm_default {
+    	group1 {
+        	pinmux = <LEDC_CH0_GPIO2>;
+        	output-enable;
+    	};
+	};
 };
