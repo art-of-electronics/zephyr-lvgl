@@ -302,7 +302,7 @@ static void lcd_dma_ring_init(void)
 	uintptr_t buffer_addr = (uintptr_t)lcd_dma_buffer;
 
 	for (size_t i = 0; i < ARRAY_SIZE(lcd_dma_buffer); ++i) {
-		lcd_dma_buffer[i] = 0xFFFFU;
+		lcd_dma_buffer[i] = 0x101F;
 	}
 
 	memset(lcd_dma_desc, 0, sizeof(lcd_dma_desc));
