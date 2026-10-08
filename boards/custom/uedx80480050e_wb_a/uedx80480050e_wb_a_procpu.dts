@@ -22,6 +22,7 @@
 	    zephyr,code-partition = &slot0_partition;
 	    zephyr,bt-hci = &esp32_bt_hci;
 	    zephyr,touch = &gt911;
+		zephyr,display = &lcd_rgb;
     };
 
 	aliases {
@@ -131,9 +132,36 @@
 };
 
 &lcd_cam {
-	status = "okay";
-	pinctrl-0 = <&lcd_cam_rgb_default>;
-	pinctrl-names = "default";
+    status = "okay";
+    pinctrl-0 = <&lcd_cam_rgb_default>;
+    pinctrl-names = "default";
+
+    lcd_rgb: display {
+        compatible = "espressif,esp32-lcd-cam-rgb";
+        status = "okay";
+
+        width = <800>;
+        height = <480>;
+
+        display-timings {
+            compatible = "zephyr,panel-timing";
+
+            clock-frequency = <20000000>;
+
+            hsync-len = <1>;
+            hback-porch = <42>;
+            hfront-porch = <20>;
+
+            vsync-len = <10>;
+            vback-porch = <12>;
+            vfront-porch = <4>;
+
+            hsync-active = <0>;
+            vsync-active = <0>;
+            de-active = <1>;
+            pixelclk-active = <0>;
+        };
+    };
 };
 
 &esp32_bt_hci {

@@ -2,6 +2,7 @@
 #include <zephyr/sys/printk.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/pwm.h>
+#include <zephyr/drivers/display.h>
 #include <zephyr/logging/log.h>
 
 #include "lcd_rgb_poc.h"
@@ -26,6 +27,24 @@ static int set_brightness(uint32_t percent) {
 int main(void)
 {
 	LOG_INF("VIEWE RGB LCD smoke test");
+
+	const struct device *display_dev =
+    DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
+
+	if (!device_is_ready(display_dev)) {
+    	LOG_ERR("LCD RGB display device is not ready");
+    	return -ENODEV;
+	}
+
+	struct display_capabilities caps;
+
+	display_get_capabilities(display_dev, &caps);
+
+	LOG_INF("Display device: %s", display_dev->name);
+	LOG_INF("Resolution: %u x %u",
+        caps.x_resolution,
+        caps.y_resolution);
+	LOG_INF("Pixel format: 0x%x", caps.current_pixel_format);
 
 	int ret = lcd_rgb_poc_init();
 
