@@ -11,7 +11,6 @@ target_include_directories(app PRIVATE src)
 
 target_sources(app PRIVATE
     src/main.c
-    src/lcd_rgb_poc.c
 )
 
 set(external_project_cflags

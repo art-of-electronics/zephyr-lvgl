@@ -5,8 +5,6 @@
 #include <zephyr/drivers/display.h>
 #include <zephyr/logging/log.h>
 
-#include "lcd_rgb_poc.h"
-
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 #define BACKLIGHT_NODE DT_ALIAS(backlight_pwm)
@@ -45,13 +43,6 @@ int main(void)
         caps.x_resolution,
         caps.y_resolution);
 	LOG_INF("Pixel format: 0x%x", caps.current_pixel_format);
-
-	int ret = lcd_rgb_poc_init();
-
-	if (ret < 0) {
-		LOG_ERR("LCD RGB init failed: %d", ret);
-		return ret;
-	}
 
 	LOG_INF("LCD RGB started");
 
