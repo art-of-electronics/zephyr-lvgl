@@ -1,0 +1,10 @@
+config ESP32_LCD_CAM_RGB
+    bool "ESP32-S3 LCD_CAM RGB display driver"
+    default y if DT_HAS_ESPRESSIF_ESP32_LCD_CAM_RGB_ENABLED
+    depends on DISPLAY
+    depends on SOC_SERIES_ESP32S3
+    depends on DMA
+    depends on PINCTRL
+    help
+      Enable the RGB display driver using the ESP32-S3
+      LCD_CAM peripheral and GDMA.

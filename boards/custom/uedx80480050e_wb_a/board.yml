@@ -1,0 +1,12 @@
+board:
+  name: uedx80480050e_wb_a
+  full_name: VIEWE UEDX80480050E-WB-A
+  vendor: viewe
+  revision:
+    format: major.minor.patch
+    default: "1.2.0"
+    exact: true
+    revisions:
+      - name: "1.2.0"
+  socs:
+    - name: esp32s3

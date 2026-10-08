@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  ESP32-S3 LCD_CAM RGB display controller.
+
+  Provides a 16-bit RGB565 parallel display interface
+  using the LCD_CAM peripheral and GDMA.
+
+compatible: "espressif,esp32-lcd-cam-rgb"
+
+include: display-controller.yaml
