@@ -1,0 +1,9 @@
+name: zephyr_lvgl
+
+build:
+  cmake: drivers
+  kconfig: drivers/Kconfig
+
+  settings:
+    dts_root: .
+    board_root: .

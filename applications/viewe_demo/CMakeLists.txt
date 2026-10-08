@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.20.0)
 
+set(EXTRA_ZEPHYR_MODULES
+    "${CMAKE_CURRENT_SOURCE_DIR}/../.."
+)
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(viewe_lvgl_demo)
 
