@@ -66,6 +66,7 @@ LOG_MODULE_REGISTER(esp32_lcd_cam_rgb, CONFIG_DISPLAY_LOG_LEVEL);
 #define LCD_COLOR_BLUE              (0x001FU)
 #define LCD_COLOR_WHITE             (0xFFFFU)
 #define LCD_COLOR_BLACK             (0x0000U)
+#define LCD_COLOR_SAMUS_ORANGE		(0xFBE0U)
 
 BUILD_ASSERT(0U < LCD_DMA_DESC_COUNT, "DMA descriptor count must be nonzero");
 BUILD_ASSERT(0U == (LCD_BOUNCE_SIZE % LCD_DMA_DESC_SIZE), "Bounce size must match DMA blocks");
@@ -291,6 +292,7 @@ static int lcd_framebuffer_init(struct esp32_lcd_cam_rgb_data *data)
 		LCD_COLOR_BLUE,
 		LCD_COLOR_WHITE,
 		LCD_COLOR_BLACK,
+		LCD_COLOR_SAMUS_ORANGE,
 	};
 
 	data->framebuffer = shared_multi_heap_alloc(
@@ -433,6 +435,42 @@ static void lcd_dma_debug(struct esp32_lcd_cam_rgb_data *data)
 		(0U != (data->hal.dev->lc_dma_int_raw.val & LCD_LL_EVENT_VSYNC_END)) ? 1U : 0U);
 }
 
+/* Temporary smoke test: update one vertical bar while RGB DMA keeps running. */
+static void lcd_dynamic_test_handler(struct k_work *work);
+K_WORK_DELAYABLE_DEFINE(lcd_dynamic_test_work, lcd_dynamic_test_handler);
+
+static void lcd_dynamic_test_handler(struct k_work *work)
+{
+    static const uint16_t colors[] = {
+        LCD_COLOR_RED, LCD_COLOR_GREEN, LCD_COLOR_BLUE,
+        LCD_COLOR_WHITE, LCD_COLOR_BLACK, LCD_COLOR_SAMUS_ORANGE,
+    };
+    static size_t color_index = 0U;
+    struct esp32_lcd_cam_rgb_data *data = &lcd_data;
+    const size_t bar = 2U; /* Center bar: x = 320..479 for an 800px display. */
+    const size_t x_begin = (bar * LCD_HACTIVE) / ARRAY_SIZE(colors);
+    const size_t x_end = ((bar + 1U) * LCD_HACTIVE) / ARRAY_SIZE(colors);
+    uint16_t color = colors[color_index];
+
+    ARG_UNUSED(work);
+
+    if (NULL != data->framebuffer) {
+        for (size_t y = 0U; y < LCD_VACTIVE; ++y) {
+            for (size_t x = x_begin; x < x_end; ++x) {
+                data->framebuffer[(y * LCD_HACTIVE) + x] = color;
+            }
+        }
+
+        /* Make the modified PSRAM data visible to subsequent reads. */
+        sys_cache_data_flush_range(data->framebuffer, LCD_FRAMEBUFFER_SIZE);
+        LOG_INF("Dynamic LCD test: bar %u -> RGB565 0x%04x",
+                (unsigned int)bar, (unsigned int)color);
+        color_index = (color_index + 1U) % ARRAY_SIZE(colors);
+    }
+
+    (void)k_work_reschedule(&lcd_dynamic_test_work, K_SECONDS(1));
+}
+
 static int esp32_lcd_cam_rgb_init(const struct device *dev)
 {
 	struct esp32_lcd_cam_rgb_data *data = dev->data;
@@ -478,6 +516,7 @@ static int esp32_lcd_cam_rgb_init(const struct device *dev)
 	lcd_dma_debug(data);
 
 	LOG_INF("LCD_CAM RGB initialized: %ux%u", config->width, config->height);
+	(void)k_work_reschedule(&lcd_dynamic_test_work, K_SECONDS(1));
 	return 0;
 }
 
