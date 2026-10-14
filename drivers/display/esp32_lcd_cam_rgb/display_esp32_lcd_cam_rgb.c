@@ -13,6 +13,8 @@
 #include <zephyr/sys/util.h>
 
 #include <esp_clk_tree.h>
+#include <esp_intr_alloc.h>
+#include <soc/interrupts.h>
 #include <hal/dma_types.h>
 #include <hal/gdma_channel.h>
 #include <hal/gdma_ll.h>
@@ -57,6 +59,7 @@ LOG_MODULE_REGISTER(esp32_lcd_cam_rgb, CONFIG_DISPLAY_LOG_LEVEL);
 #define LCD_DMA_DESC_SIZE           (3200U)
 #define LCD_DESCS_PER_BOUNCE        (LCD_BOUNCE_SIZE / LCD_DMA_DESC_SIZE)
 #define LCD_DMA_DESC_COUNT          (LCD_DESCS_PER_BOUNCE * LCD_BOUNCE_COUNT)
+#define LCD_FIFO_SKIP_BYTES         ((LCD_LL_FIFO_DEPTH + 1U) * sizeof(uint16_t))
 
 #define LCD_GDMA_PSRAM_BURST_SIZE   (32U)
 #define LCD_GDMA_CACHE_ALIGNMENT    (32U)
@@ -66,8 +69,11 @@ LOG_MODULE_REGISTER(esp32_lcd_cam_rgb, CONFIG_DISPLAY_LOG_LEVEL);
 #define LCD_COLOR_BLUE              (0x001FU)
 #define LCD_COLOR_WHITE             (0xFFFFU)
 #define LCD_COLOR_BLACK             (0x0000U)
-#define LCD_COLOR_SAMUS_ORANGE		(0xFBE0U)
+#define LCD_COLOR_SAMUS_ORANGE      (0xFBE0U)
 
+#define LCD_TEST_SQUARE_SIZE        (100U)
+
+BUILD_ASSERT(LCD_FIFO_SKIP_BYTES < LCD_DMA_DESC_SIZE, "FIFO skip must fit one DMA descriptor");
 BUILD_ASSERT(0U < LCD_DMA_DESC_COUNT, "DMA descriptor count must be nonzero");
 BUILD_ASSERT(0U == (LCD_BOUNCE_SIZE % LCD_DMA_DESC_SIZE), "Bounce size must match DMA blocks");
 BUILD_ASSERT(0U == (LCD_VACTIVE % LCD_BOUNCE_LINES), "Display height must match bounce lines");
@@ -113,6 +119,10 @@ struct esp32_lcd_cam_rgb_data {
 	size_t next_line;
 	volatile uint32_t bounce_eof_count;
 	volatile uint32_t bounce_error_count;
+	volatile uint32_t vsync_count;
+	volatile uint32_t restart_count;
+	intr_handle_t lcd_intr_handle;
+	dma_descriptor_t restart_desc __aligned(4);
 
 	dma_descriptor_t dma_desc[LCD_DMA_DESC_COUNT] __aligned(4);
 
@@ -286,14 +296,6 @@ static int lcd_dma_channel_init(struct esp32_lcd_cam_rgb_data *data)
 
 static int lcd_framebuffer_init(struct esp32_lcd_cam_rgb_data *data)
 {
-	static const uint16_t colors[] = {
-		LCD_COLOR_RED,
-		LCD_COLOR_GREEN,
-		LCD_COLOR_BLUE,
-		LCD_COLOR_WHITE,
-		LCD_COLOR_BLACK,
-		LCD_COLOR_SAMUS_ORANGE,
-	};
 
 	data->framebuffer = shared_multi_heap_alloc(
 		SMH_REG_ATTR_EXTERNAL, LCD_FRAMEBUFFER_SIZE);
@@ -313,13 +315,7 @@ static int lcd_framebuffer_init(struct esp32_lcd_cam_rgb_data *data)
 		return -EINVAL;
 	}
 
-	for (size_t y = 0U; y < LCD_VACTIVE; ++y) {
-		for (size_t x = 0U; x < LCD_HACTIVE; ++x) {
-			size_t color_index = (x * ARRAY_SIZE(colors)) / LCD_HACTIVE;
-
-			data->framebuffer[(y * LCD_HACTIVE) + x] = colors[color_index];
-		}
-	}
+	memset(data->framebuffer, 0, LCD_FRAMEBUFFER_SIZE);
 
 	sys_cache_data_flush_range(data->framebuffer, LCD_FRAMEBUFFER_SIZE);
 
@@ -337,7 +333,9 @@ static void lcd_bounce_fill(struct esp32_lcd_cam_rgb_data *data, size_t index)
 
 	memcpy(data->bounce[index], (const uint8_t *)data->framebuffer + offset,
 	       LCD_BOUNCE_SIZE);
-	sys_cache_data_flush_range(data->bounce[index], LCD_BOUNCE_SIZE);
+	/* The bounce buffer resides in internal SRAM, which is DMA-visible.
+	 * Match ESP-IDF's internal-memory bounce handling: no per-EOF cache flush.
+	 */
 	data->next_line = (data->next_line + LCD_BOUNCE_LINES) % LCD_VACTIVE;
 }
 
@@ -373,6 +371,22 @@ static void lcd_dma_callback(const struct device *dev, void *user_data,
 	data->bounce_eof_count++;
 }
 
+/* ESP-IDF esp_lcd_panel_rgb.c: dedicated ESP32-S3 FIFO-preserving restart link.
+ * The first DMA descriptor skips LCD_LL_FIFO_DEPTH+1 pixels; subsequent
+ * descriptors use the normal two-buffer ring.
+ */
+static void lcd_restart_desc_init(struct esp32_lcd_cam_rgb_data *data)
+{
+	memset(&data->restart_desc, 0, sizeof(data->restart_desc));
+	data->restart_desc.buffer = &data->bounce[0][LCD_FIFO_SKIP_BYTES];
+	data->restart_desc.dw0.size = LCD_DMA_DESC_SIZE - LCD_FIFO_SKIP_BYTES;
+	data->restart_desc.dw0.length = LCD_DMA_DESC_SIZE - LCD_FIFO_SKIP_BYTES;
+	data->restart_desc.dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
+	data->restart_desc.dw0.suc_eof = 0;
+	data->restart_desc.next = &data->dma_desc[1];
+	sys_cache_data_flush_range(&data->restart_desc, sizeof(data->restart_desc));
+}
+
 static void lcd_dma_ring_init(struct esp32_lcd_cam_rgb_data *data)
 {
 	memset(data->dma_desc, 0, sizeof(data->dma_desc));
@@ -397,6 +411,7 @@ static void lcd_dma_ring_init(struct esp32_lcd_cam_rgb_data *data)
 	}
 
 	sys_cache_data_flush_range(data->dma_desc, sizeof(data->dma_desc));
+	lcd_restart_desc_init(data);
 	LOG_INF("SRAM bounce DMA ring: %u descriptors, %u bytes per buffer",
 		LCD_DMA_DESC_COUNT, LCD_BOUNCE_SIZE);
 }
@@ -424,51 +439,124 @@ static void lcd_rgb_start(struct esp32_lcd_cam_rgb_data *data)
 	LOG_INF("LCD RGB stream started");
 }
 
+/*
+ * Mirror the ESP-IDF v5.4.2 RGB VSYNC restart algorithm for ESP32-S3.
+ * CONFIG_LCD_RGB_RESTART_IN_VSYNC=y was verified on the working reference.
+ * LCD_CAM and GDMA each retain their own hardware interrupt source.
+ *
+ * The first bounce buffer may already contain the beginning of the next
+ * frame when VSYNC_END fires. Do not unconditionally rewind the source.
+ */
+static void lcd_vsync_isr(void *arg)
+{
+	struct esp32_lcd_cam_rgb_data *data = arg;
+	lcd_cam_dev_t *dev = data->hal.dev;
+	const uint32_t status = lcd_ll_get_interrupt_status(dev);
+
+	lcd_ll_clear_interrupt_status(dev, status);
+	if (0U == (status & LCD_LL_EVENT_VSYNC_END)) {
+		return;
+	}
+
+	data->vsync_count++;
+
+	/* ESP-IDF: position beyond the first two bounce buffers means we
+	 * have not preloaded the upcoming frame yet. Start at its origin.
+	 */
+	if (data->next_line > (LCD_BOUNCE_COUNT * LCD_BOUNCE_LINES)) {
+		data->next_line = 0U;
+	}
+
+	if (data->next_line < LCD_BOUNCE_LINES) {
+		lcd_bounce_fill(data, 0U);
+	}
+
+	/* ESP32-S3: restart from a dedicated descriptor that skips the LCD
+	 * FIFO-preserved pixels. Follow ESP-IDF: reset FIFO, reset GDMA,
+	 * and restart descriptors without stopping the LCD timing engine.
+	 * Do not invoke Zephyr dma_stop()/dma_start() from this interrupt.
+	 */
+	lcd_ll_fifo_reset(dev);
+	gdma_ll_tx_reset_channel(&GDMA, LCD_GDMA_HW_CHANNEL);
+	gdma_ll_tx_set_desc_addr(&GDMA, LCD_GDMA_HW_CHANNEL,
+		(uint32_t)(uintptr_t)&data->restart_desc);
+	gdma_ll_tx_start(&GDMA, LCD_GDMA_HW_CHANNEL);
+
+	if (data->next_line < (LCD_BOUNCE_COUNT * LCD_BOUNCE_LINES)) {
+		lcd_bounce_fill(data, 1U);
+	}
+
+	data->restart_count++;
+}
+
+static int lcd_vsync_irq_init(struct esp32_lcd_cam_rgb_data *data)
+{
+	int ret = esp_intr_alloc(ETS_LCD_CAM_INTR_SOURCE,
+		ESP_INTR_FLAG_INTRDISABLED, lcd_vsync_isr, data,
+		&data->lcd_intr_handle);
+
+	if (ESP_OK != ret) {
+		LOG_ERR("LCD_CAM IRQ allocation failed (%d)", ret);
+		return -EIO;
+	}
+
+	lcd_ll_clear_interrupt_status(data->hal.dev, LCD_LL_EVENT_VSYNC_END);
+	lcd_ll_enable_interrupt(data->hal.dev, LCD_LL_EVENT_VSYNC_END, true);
+	ret = esp_intr_enable(data->lcd_intr_handle);
+	if (ESP_OK != ret) {
+		lcd_ll_enable_interrupt(data->hal.dev, LCD_LL_EVENT_VSYNC_END, false);
+		(void)esp_intr_free(data->lcd_intr_handle);
+		data->lcd_intr_handle = NULL;
+		LOG_ERR("LCD_CAM IRQ enable failed (%d)", ret);
+		return -EIO;
+	}
+
+	return 0;
+}
+
 static void lcd_dma_debug(struct esp32_lcd_cam_rgb_data *data)
 {
 	uint32_t status = gdma_ll_tx_get_interrupt_status(&GDMA, LCD_GDMA_HW_CHANNEL, true);
 
 	LOG_INF("Bounce TX EOF callbacks: %u", data->bounce_eof_count);
+	LOG_INF("VSYNC=%u restart=%u", data->vsync_count, data->restart_count);
 	LOG_INF("Bounce callback errors: %u", data->bounce_error_count);
 	LOG_INF("GDMA TX raw status: 0x%08x", status);
 	LOG_INF("LCD VSYNC_END: %u",
 		(0U != (data->hal.dev->lc_dma_int_raw.val & LCD_LL_EVENT_VSYNC_END)) ? 1U : 0U);
 }
 
-/* Temporary smoke test: update one vertical bar while RGB DMA keeps running. */
-static void lcd_dynamic_test_handler(struct k_work *work);
-K_WORK_DELAYABLE_DEFINE(lcd_dynamic_test_work, lcd_dynamic_test_handler);
+/* Temporary API smoke test: draw an orange square through display_write(). */
+static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_t y,
+                                   const struct display_buffer_descriptor *desc,
+                                   const void *buf);
 
-static void lcd_dynamic_test_handler(struct k_work *work)
+static void lcd_square_test_handler(struct k_work *work);
+K_WORK_DELAYABLE_DEFINE(lcd_square_test_work, lcd_square_test_handler);
+
+static void lcd_square_test_handler(struct k_work *work)
 {
-    static const uint16_t colors[] = {
-        LCD_COLOR_RED, LCD_COLOR_GREEN, LCD_COLOR_BLUE,
-        LCD_COLOR_WHITE, LCD_COLOR_BLACK, LCD_COLOR_SAMUS_ORANGE,
+    static uint16_t square[LCD_TEST_SQUARE_SIZE * LCD_TEST_SQUARE_SIZE];
+    const struct display_buffer_descriptor desc = {
+        .buf_size = sizeof(square),
+        .width = LCD_TEST_SQUARE_SIZE,
+        .height = LCD_TEST_SQUARE_SIZE,
+        .pitch = LCD_TEST_SQUARE_SIZE,
     };
-    static size_t color_index = 0U;
-    struct esp32_lcd_cam_rgb_data *data = &lcd_data;
-    const size_t bar = 2U; /* Center bar: x = 320..479 for an 800px display. */
-    const size_t x_begin = (bar * LCD_HACTIVE) / ARRAY_SIZE(colors);
-    const size_t x_end = ((bar + 1U) * LCD_HACTIVE) / ARRAY_SIZE(colors);
-    uint16_t color = colors[color_index];
+    const struct device *display = DEVICE_DT_GET(LCD_DISPLAY_NODE);
+    const uint16_t x = (uint16_t)((LCD_HACTIVE - LCD_TEST_SQUARE_SIZE) / 2U);
+    const uint16_t y = (uint16_t)((LCD_VACTIVE - LCD_TEST_SQUARE_SIZE) / 2U);
+    int ret = 0;
 
     ARG_UNUSED(work);
 
-    if (NULL != data->framebuffer) {
-        for (size_t y = 0U; y < LCD_VACTIVE; ++y) {
-            for (size_t x = x_begin; x < x_end; ++x) {
-                data->framebuffer[(y * LCD_HACTIVE) + x] = color;
-            }
-        }
-
-        /* Make the modified PSRAM data visible to subsequent reads. */
-        sys_cache_data_flush_range(data->framebuffer, LCD_FRAMEBUFFER_SIZE);
-        LOG_INF("Dynamic LCD test: bar %u -> RGB565 0x%04x",
-                (unsigned int)bar, (unsigned int)color);
-        color_index = (color_index + 1U) % ARRAY_SIZE(colors);
+    for (size_t i = 0U; i < ARRAY_SIZE(square); ++i) {
+        square[i] = LCD_COLOR_SAMUS_ORANGE;
     }
 
-    (void)k_work_reschedule(&lcd_dynamic_test_work, K_SECONDS(1));
+    ret = display_write(display, x, y, &desc, square);
+    LOG_INF("Samus Orange square: x=%u y=%u size=%ux%u result=%d",
+            x, y, LCD_TEST_SQUARE_SIZE, LCD_TEST_SQUARE_SIZE, ret);
 }
 
 static int esp32_lcd_cam_rgb_init(const struct device *dev)
@@ -510,26 +598,64 @@ static int esp32_lcd_cam_rgb_init(const struct device *dev)
 	}
 
 	lcd_dma_ring_init(data);
+	ret = lcd_vsync_irq_init(data);
+	if (ret < 0) {
+		shared_multi_heap_free(data->framebuffer);
+		data->framebuffer = NULL;
+		return ret;
+	}
 	lcd_rgb_start(data);
 
 	k_msleep(1000);
 	lcd_dma_debug(data);
 
 	LOG_INF("LCD_CAM RGB initialized: %ux%u", config->width, config->height);
-	(void)k_work_reschedule(&lcd_dynamic_test_work, K_SECONDS(1));
+	(void)k_work_reschedule(&lcd_square_test_work, K_SECONDS(1));
 	return 0;
 }
 
-static int esp32_lcd_cam_rgb_write(const struct device *dev, const uint16_t x, const uint16_t y, 
-								   const struct display_buffer_descriptor *desc, const void *buf)
+static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_t y,
+                                   const struct display_buffer_descriptor *desc,
+                                   const void *buf)
 {
-	ARG_UNUSED(dev);
-	ARG_UNUSED(x);
-	ARG_UNUSED(y);
-	ARG_UNUSED(desc);
-	ARG_UNUSED(buf);
+    struct esp32_lcd_cam_rgb_data *data = dev->data;
+    const struct esp32_lcd_cam_rgb_config *config = dev->config;
+    size_t source_stride = 0U;
+    size_t row_bytes = 0U;
 
-	return -ENOTSUP;
+    if ((NULL == desc) || (NULL == buf) || (NULL == data->framebuffer)) {
+        return -EINVAL;
+    }
+
+    if ((0U == desc->width) || (0U == desc->height) ||
+        (desc->pitch < desc->width)) {
+        return -EINVAL;
+    }
+
+    if (((uint32_t)x + desc->width > config->width) ||
+        ((uint32_t)y + desc->height > config->height)) {
+        return -EINVAL;
+    }
+
+    source_stride = (size_t)desc->pitch * sizeof(uint16_t);
+    row_bytes = (size_t)desc->width * sizeof(uint16_t);
+
+    if ((source_stride > SIZE_MAX / desc->height) ||
+        (desc->buf_size < (((size_t)desc->height - 1U) * source_stride + row_bytes))) {
+        return -EINVAL;
+    }
+
+    for (size_t row = 0U; row < desc->height; ++row) {
+        uint16_t *dst = &data->framebuffer[((size_t)y + row) * config->width + x];
+        const uint8_t *src = (const uint8_t *)buf + row * source_stride;
+
+        memcpy(dst, src, row_bytes);
+    }
+
+    /* The framebuffer is read by CPU into SRAM bounce buffers. */
+    sys_cache_data_flush_range(data->framebuffer, LCD_FRAMEBUFFER_SIZE);
+
+    return 0;
 }
 
 static void esp32_lcd_cam_rgb_get_capabilities(const struct device *dev, struct display_capabilities *capabilities)
