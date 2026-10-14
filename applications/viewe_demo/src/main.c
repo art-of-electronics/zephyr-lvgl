@@ -6,7 +6,6 @@
 #include <zephyr/logging/log.h>
 
 #include <stdint.h>
-//#include <zephyr/multi_heap/shared_multi_heap.h>
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
@@ -26,63 +25,29 @@ static int set_brightness(uint32_t percent) {
 	}
 
 	uint32_t pulse = (backlight.period * percent) / 100U;
-
 	return pwm_set_pulse_dt(&backlight, pulse);
 }
-/*
-static int framebuffer_test(void)
-{
-    uint16_t *framebuffer = shared_multi_heap_alloc(
-        SMH_REG_ATTR_EXTERNAL, FRAMEBUFFER_SIZE);
 
-    if (NULL == framebuffer) {
-        printk("PSRAM framebuffer allocation failed\n");
-        return -ENOMEM;
-    }
+extern int samus_orange_smoke_test(const struct device *display);
+extern int dynamic_test(const struct device *display);
 
-    printk("PSRAM framebuffer allocated: %u bytes at %p\n",
-           (unsigned int)FRAMEBUFFER_SIZE, (void *)framebuffer);
-
-    for (size_t i = 0; i < FRAMEBUFFER_PIXELS; ++i) {
-        framebuffer[i] = 0xF800U;
-    }
-
-    for (size_t i = 0; i < FRAMEBUFFER_PIXELS; ++i) {
-        if (0xF800U != framebuffer[i]) {
-            printk("PSRAM framebuffer verification failed at pixel %u\n",
-                   (unsigned int)i);
-
-            shared_multi_heap_free(framebuffer);
-            return -EIO;
-        }
-    }
-
-    printk("PSRAM framebuffer write/read test: PASS\n");
-
-    shared_multi_heap_free(framebuffer);
-    return 0;
-}
-*/
 int main(void)
 {
-	LOG_INF("VIEWE RGB LCD smoke test");
+	LOG_INF("VIEWE RGB LCD Zephyr RTOS");
 
-	const struct device *display_dev =
-    DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
+	const struct device *display = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
 
-	if (!device_is_ready(display_dev)) {
+	if (!device_is_ready(display)) {
     	LOG_ERR("LCD RGB display device is not ready");
     	return -ENODEV;
 	}
 
 	struct display_capabilities caps;
 
-	display_get_capabilities(display_dev, &caps);
+	display_get_capabilities(display, &caps);
 
-	LOG_INF("Display device: %s", display_dev->name);
-	LOG_INF("Resolution: %u x %u",
-        caps.x_resolution,
-        caps.y_resolution);
+	LOG_INF("Display device: %s", display->name);
+	LOG_INF("Resolution: %u x %u", caps.x_resolution, caps.y_resolution);
 	LOG_INF("Pixel format: 0x%x", caps.current_pixel_format);
 
 	LOG_INF("LCD RGB started");
@@ -95,8 +60,11 @@ int main(void)
 	set_brightness(35);
     LOG_INF("BACKLIGHT ON");
 
-	//LOG_INF("Starting framebuffer test");
-	//framebuffer_test();
+	int ret = samus_orange_smoke_test(display);
+	if (0 == ret) {
+    	k_sleep(K_SECONDS(5));
+    	ret = dynamic_test(display);
+	}
 
 	while (1) {
 		k_sleep(K_SECONDS(1));

@@ -11,6 +11,8 @@ target_include_directories(app PRIVATE src)
 
 target_sources(app PRIVATE
     src/main.c
+    src/test_samus_orange.c
+    src/test_dynamic_unlimited.c
 )
 
 set(external_project_cflags
