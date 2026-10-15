@@ -27,8 +27,7 @@ int samus_orange_smoke_test(const struct device *display)
     }
 
     display_get_capabilities(display, &caps);
-    if ((caps.x_resolution < SAMUS_SQUARE_SIZE) ||
-        (caps.y_resolution < SAMUS_SQUARE_SIZE)) {
+    if ((caps.x_resolution < SAMUS_SQUARE_SIZE) || (caps.y_resolution < SAMUS_SQUARE_SIZE)) {
         return -EINVAL;
     }
 

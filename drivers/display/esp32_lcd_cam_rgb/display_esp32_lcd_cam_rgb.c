@@ -1,3 +1,6 @@
+/*****************************************************************************
+                                    INCLUDES
+*****************************************************************************/
 #include <errno.h>
 #include <stdint.h>
 #include <string.h>
@@ -23,6 +26,9 @@
 #include <soc/gdma_struct.h>
 #include <zephyr/multi_heap/shared_multi_heap.h>
 
+/*****************************************************************************
+                          PRIVATE DEFINES / MACROS
+*****************************************************************************/
 #define DT_DRV_COMPAT espressif_esp32_lcd_cam_rgb
 #define LCD_CAM_NODE DT_NODELABEL(lcd_cam)
 #define LCD_DISPLAY_NODE DT_INST(0, DT_DRV_COMPAT)
@@ -84,6 +90,9 @@ BUILD_ASSERT(0U < LCD_PERIPH_CLOCK_PRE_SCALE, "LCD peripheral clock prescaler mu
 
 #define LCD_GDMA_HW_CHANNEL         (LCD_DMA_CHANNEL / 2U)
 
+/*****************************************************************************
+                     PRIVATE STRUCTS / ENUMS / VARIABLES
+*****************************************************************************/
 struct esp32_lcd_cam_rgb_config {
 	uint16_t width;
 	uint16_t height;
@@ -96,6 +105,13 @@ struct esp32_lcd_cam_rgb_config {
 	uint16_t vfront_porch;
 };
 
+/**
+ * @brief Runtime state of the ESP32-S3 LCD_CAM RGB driver.
+ *
+ * @note RGB transmission uses SRAM bounce buffers and a circular GDMA
+ *       descriptor ring. A dedicated restart descriptor is used to
+ *       synchronize transmission with VSYNC.
+ */
 struct esp32_lcd_cam_rgb_data {
 	enum display_pixel_format pixel_format;
 	enum display_orientation orientation;
@@ -107,10 +123,10 @@ struct esp32_lcd_cam_rgb_data {
 
 	uint16_t *framebuffer;
 	uint8_t bounce[LCD_BOUNCE_COUNT][LCD_BOUNCE_SIZE] __aligned(32);
-	size_t next_line;
+	size_t next_line; 		// Next framebuffer line to copy into a bounce buffer.
 	intr_handle_t lcd_intr_handle;
-	dma_descriptor_t restart_desc __aligned(4);
 
+	dma_descriptor_t restart_desc __aligned(4);
 	dma_descriptor_t dma_desc[LCD_DMA_DESC_COUNT] __aligned(4);
 
 	struct dma_block_config dma_setup_block;
@@ -131,6 +147,21 @@ static const struct esp32_lcd_cam_rgb_config lcd_config = {
 	.vfront_porch = LCD_VFRONT_PORCH,
 };
 
+/*****************************************************************************
+                         PRIVATE FUNCTION DECLARATIONS
+*****************************************************************************/
+static void lcd_dma_callback(const struct device *dev, void *user_data, 
+						     uint32_t channel, int status);
+
+
+/*****************************************************************************
+                       PRIVATE FUNCTION IMPLEMENTATIONS
+*****************************************************************************/
+/**
+ * @brief Initialize the LCD_CAM pin configuration.
+ * 
+ * @return 0 on success, negative error code on failure.
+ */
 static int lcd_pinctrl_init(void)
 {
 	const struct pinctrl_dev_config *pcfg = PINCTRL_DT_DEV_CONFIG_GET(LCD_CAM_NODE);
@@ -145,6 +176,13 @@ static int lcd_pinctrl_init(void)
 	return 0;
 }
 
+/**
+ * @brief Initialize the LCD_CAM clock configuration.
+ *
+ * @param [in] data 	Pointer to the LCD driver runtime data.
+ * @param [in] config 	Pointer to the LCD driver configuration.
+ * @return 0 on success, negative error code on failure.
+ */
 static int lcd_clock_init(struct esp32_lcd_cam_rgb_data *data, const struct esp32_lcd_cam_rgb_config *config)
 {
 	const soc_periph_lcd_clk_src_t clock_source = LCD_CLK_SRC_DEFAULT;
@@ -186,6 +224,12 @@ static int lcd_clock_init(struct esp32_lcd_cam_rgb_data *data, const struct esp3
 	return 0;
 }
 
+/**
+ * @brief Configure the LCD_CAM RGB synchronization timings.
+ *
+ * @param [in] data 	Pointer to the LCD driver runtime data.
+ * @param [in] config 	Pointer to the LCD driver configuration.
+ */
 static void lcd_timing_init(struct esp32_lcd_cam_rgb_data *data, const struct esp32_lcd_cam_rgb_config *config)
 {
 	lcd_cam_dev_t *dev = data->hal.dev;
@@ -213,6 +257,13 @@ static void lcd_timing_init(struct esp32_lcd_cam_rgb_data *data, const struct es
 	lcd_ll_set_data_delay_ticks(dev, 0);
 }
 
+/**
+ * @brief Initialize the LCD_CAM peripheral and configure RGB output.
+ *
+ * @param [in,out] data  Pointer to the LCD driver runtime data.
+ * @param [in] config    Pointer to the LCD driver configuration.
+ * @return 0 on success, negative error code on failure. 
+ */
 static int lcd_cam_init(struct esp32_lcd_cam_rgb_data *data, const struct esp32_lcd_cam_rgb_config *config)
 {
 	int ret = -1;
@@ -237,8 +288,14 @@ static int lcd_cam_init(struct esp32_lcd_cam_rgb_data *data, const struct esp32_
 	return 0;
 }
 
-static void lcd_dma_callback(const struct device *dev, void *user_data, uint32_t channel, int status);
-
+/**
+ * @brief Initialize and configure the LCD GDMA transmit channel.
+ *
+ * @param [in,out] data Pointer to the LCD driver runtime data.
+ * @return 0 on success, negative error code on failure.
+ *
+ * @note The LCD requires an odd-numbered Zephyr DMA channel for transmission. 
+ */
 static int lcd_dma_channel_init(struct esp32_lcd_cam_rgb_data *data)
 {
 	int ret = -1;
@@ -279,6 +336,14 @@ static int lcd_dma_channel_init(struct esp32_lcd_cam_rgb_data *data)
 	return 0;
 }
 
+/**
+ * @brief Allocate and initialize the LCD framebuffer in external PSRAM.
+ *
+ * @param [in,out] data Pointer to the LCD driver runtime data.
+ * @return 0 on success, negative error code on failure.
+ *
+ * @note The framebuffer must be aligned to the GDMA PSRAM burst size.
+ */
 static int lcd_framebuffer_init(struct esp32_lcd_cam_rgb_data *data)
 {
 	data->framebuffer = shared_multi_heap_alloc(
@@ -310,7 +375,14 @@ static int lcd_framebuffer_init(struct esp32_lcd_cam_rgb_data *data)
 	return 0;
 }
 
-/* Copy one 10-line slice from PSRAM into internal SRAM. */
+/**
+ * @brief Fill the selected DMA bounce buffer with framebuffer data.
+ *
+ * @param [in,out] data Pointer to the LCD driver runtime data.
+ * @param [in] index     Index of the destination bounce buffer.
+ *
+ * @note Copies a slice from external PSRAM to internal SRAM for GDMA transfer.
+ */
 static void lcd_bounce_fill(struct esp32_lcd_cam_rgb_data *data, size_t index)
 {
 	size_t offset = data->next_line * LCD_HACTIVE * sizeof(uint16_t);
@@ -320,7 +392,16 @@ static void lcd_bounce_fill(struct esp32_lcd_cam_rgb_data *data, size_t index)
 	data->next_line = (data->next_line + LCD_BOUNCE_LINES) % LCD_VACTIVE;
 }
 
-/* Invoked by Zephyr's existing GDMA ISR; no additional IRQ registration. */
+/**
+ * @brief Handle GDMA transfer completion and refill the corresponding bounce buffer.
+ *
+ * @param [in] dev       		Pointer to the DMA controller device.
+ * @param [in,out] user_data 	Pointer to the LCD driver runtime data.
+ * @param [in] channel   		DMA channel number.
+ * @param [in] status    		DMA transfer status.
+ *
+ * @note Runs in interrupt context using Zephyr's existing GDMA ISR.
+ */
 static void lcd_dma_callback(const struct device *dev, void *user_data, uint32_t channel, int status)
 {
 	struct esp32_lcd_cam_rgb_data *data = user_data;
@@ -347,9 +428,15 @@ static void lcd_dma_callback(const struct device *dev, void *user_data, uint32_t
 	lcd_bounce_fill(data, index);
 }
 
-/* ESP-IDF esp_lcd_panel_rgb.c: dedicated ESP32-S3 FIFO-preserving restart link.
- * The first DMA descriptor skips LCD_LL_FIFO_DEPTH+1 pixels; subsequent
- * descriptors use the normal two-buffer ring.
+/**
+ * @brief Initialize the GDMA descriptor used to restart RGB transmission.
+ *
+ * @param [in,out] data Pointer to the LCD driver runtime data.
+ *
+ * @note Based on the ESP-IDF esp_lcd_panel_rgb.c restart mechanism.
+ * 		 The restart descriptor skips the LCD_CAM FIFO depth plus one pixel
+ *       to preserve FIFO contents during transmission restart. Subsequent
+ *       descriptors continue through the regular DMA descriptor ring.
  */
 static void lcd_restart_desc_init(struct esp32_lcd_cam_rgb_data *data)
 {
@@ -363,6 +450,15 @@ static void lcd_restart_desc_init(struct esp32_lcd_cam_rgb_data *data)
 	sys_cache_data_flush_range(&data->restart_desc, sizeof(data->restart_desc));
 }
 
+/**
+ * @brief Initialize the circular GDMA descriptor ring for RGB transmission.
+ *
+ * @param [in,out] data Pointer to the LCD driver runtime data.
+ *
+ * @note The descriptor ring alternates between two SRAM bounce buffers.
+ *       The final descriptor links back to the first, enabling continuous
+ *       DMA transmission.
+ */
 static void lcd_dma_ring_init(struct esp32_lcd_cam_rgb_data *data)
 {
 	memset(data->dma_desc, 0, sizeof(data->dma_desc));
@@ -388,6 +484,14 @@ static void lcd_dma_ring_init(struct esp32_lcd_cam_rgb_data *data)
 	LOG_INF("SRAM bounce DMA ring: %u descriptors, %u bytes per buffer", LCD_DMA_DESC_COUNT, LCD_BOUNCE_SIZE);
 }
 
+/**
+ * @brief Start continuous LCD_CAM RGB transmission using GDMA.
+ *
+ * @param [in] data Pointer to the LCD driver runtime data.
+ *
+ * @note The GDMA TX interrupt is managed by Zephyr. No additional
+ *       interrupt registration is required.
+ */
 static void lcd_rgb_start(struct esp32_lcd_cam_rgb_data *data)
 {
 	lcd_cam_dev_t *dev = data->hal.dev;
@@ -411,10 +515,18 @@ static void lcd_rgb_start(struct esp32_lcd_cam_rgb_data *data)
 	LOG_INF("LCD RGB stream started");
 }
 
-/*
- * ESP32-S3 VSYNC recovery mirrors ESP-IDF v5.4.2 with restart on every frame.
- * The first bounce buffer may already hold the beginning of the next frame.
- * Keep the position-dependent refills and the LCD FIFO / GDMA reset order.
+/**
+ * @brief Handle LCD_CAM VSYNC and restart GDMA transmission.
+ *
+ * @param [in,out] arg Pointer to the LCD driver runtime data.
+ *
+ * @note Implements the ESP32-S3 VSYNC recovery mechanism based on ESP-IDF
+ *       v5.4.2. The restart preserves the required FIFO pixel offset
+ *       and synchronizes bounce buffer refilling with frame boundaries.
+ *
+ * @note The LCD FIFO must be reset before the GDMA channel is restarted.
+ *       Do not stop the LCD timing engine or invoke Zephyr DMA API
+ *       functions from this interrupt handler.
  */
 static void lcd_vsync_isr(void *arg)
 {
@@ -454,6 +566,15 @@ static void lcd_vsync_isr(void *arg)
 
 }
 
+/**
+ * @brief Register and enable the LCD_CAM VSYNC interrupt handler.
+ *
+ * @param [in,out] data Pointer to the LCD driver runtime data.
+ * @return 0 on success, negative error code on failure.
+ *
+ * @note The interrupt is allocated in a disabled state and enabled
+ *       only after configuring the LCD_CAM VSYNC interrupt source.
+ */
 static int lcd_vsync_irq_init(struct esp32_lcd_cam_rgb_data *data)
 {
 	int ret = esp_intr_alloc(ETS_LCD_CAM_INTR_SOURCE,
@@ -479,6 +600,15 @@ static int lcd_vsync_irq_init(struct esp32_lcd_cam_rgb_data *data)
 	return 0;
 }
 
+/**
+ * @brief Initialize the ESP32-S3 LCD_CAM RGB display driver.
+ *
+ * @param [in] dev Pointer to the display device instance.
+ * @return 0 on success, negative error code on failure.
+ *
+ * @note Initializes the LCD_CAM peripheral, allocates the framebuffer,
+ *       configures GDMA and VSYNC interrupts, and starts RGB transmission.
+ */
 static int esp32_lcd_cam_rgb_init(const struct device *dev)
 {
 	struct esp32_lcd_cam_rgb_data *data = dev->data;
@@ -530,6 +660,20 @@ static int esp32_lcd_cam_rgb_init(const struct device *dev)
 	return 0;
 }
 
+/**
+ * @brief Write RGB565 pixel data to the LCD framebuffer.
+ *
+ * @param [in] dev  Pointer to the display device instance.
+ * @param [in] x    Horizontal coordinate of the destination area.
+ * @param [in] y    Vertical coordinate of the destination area.
+ * @param [in] desc	Pointer to the source buffer descriptor.
+ * @param [in] buf 	Pointer to the source pixel data.
+ * @return 0 on success, -EINVAL on invalid parameters.
+ *
+ * @note Supports partial framebuffer updates and source buffers with
+ *       a configurable row pitch. The entire framebuffer cache is
+ *       flushed after each write.
+ */
 static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_t y,
                                    const struct display_buffer_descriptor *desc, const void *buf)
 {
@@ -572,6 +716,12 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
     return 0;
 }
 
+/**
+ * @brief Retrieve the LCD display capabilities.
+ *
+ * @param [in] dev           	Pointer to the display device instance.
+ * @param [out] capabilities	Pointer to the display capabilities structure.
+ */
 static void esp32_lcd_cam_rgb_get_capabilities(const struct device *dev, struct display_capabilities *capabilities)
 {
 	const struct esp32_lcd_cam_rgb_data *data = dev->data;
@@ -587,6 +737,15 @@ static void esp32_lcd_cam_rgb_get_capabilities(const struct device *dev, struct 
 	capabilities->current_orientation = data->orientation;
 }
 
+/**
+ * @brief Set the LCD display pixel format.
+ *
+ * @param [in] dev          Pointer to the display device instance.
+ * @param [in] pixel_format	Requested pixel format.
+ * @return 0 on success, -ENOTSUP if the requested format is unsupported.
+ *
+ * @note Only RGB565 pixel format is supported.
+ */
 static int esp32_lcd_cam_rgb_set_pixel_format(const struct device *dev, const enum display_pixel_format pixel_format)
 {
 	struct esp32_lcd_cam_rgb_data *data = dev->data;
@@ -600,6 +759,15 @@ static int esp32_lcd_cam_rgb_set_pixel_format(const struct device *dev, const en
 	return 0;
 }
 
+/**
+ * @brief Set the LCD display orientation.
+ *
+ * @param [in] dev         	Pointer to the display device instance.
+ * @param [in] orientation	Requested display orientation.
+ * @return 0 on success, -ENOTSUP if the requested orientation is unsupported.
+ *
+ * @note Only the normal display orientation is supported.
+ */
 static int esp32_lcd_cam_rgb_set_orientation(const struct device *dev, const enum display_orientation orientation)
 {
 	struct esp32_lcd_cam_rgb_data *data = dev->data;
@@ -613,6 +781,10 @@ static int esp32_lcd_cam_rgb_set_orientation(const struct device *dev, const enu
 	return 0;
 }
 
+/*****************************************************************************
+                            DEVICE REGISTRATION
+*****************************************************************************/
+
 static DEVICE_API(display, esp32_lcd_cam_rgb_api) = {
 	.write = esp32_lcd_cam_rgb_write,
 	.get_capabilities = esp32_lcd_cam_rgb_get_capabilities,
@@ -620,5 +792,6 @@ static DEVICE_API(display, esp32_lcd_cam_rgb_api) = {
 	.set_orientation = esp32_lcd_cam_rgb_set_orientation,
 };
 
-DEVICE_DT_INST_DEFINE(0, esp32_lcd_cam_rgb_init, NULL, &lcd_data, &lcd_config, POST_KERNEL,
-			          CONFIG_DISPLAY_INIT_PRIORITY, &esp32_lcd_cam_rgb_api);
+DEVICE_DT_INST_DEFINE(0, esp32_lcd_cam_rgb_init, NULL, &lcd_data, &lcd_config, 
+					  POST_KERNEL, CONFIG_DISPLAY_INIT_PRIORITY, 
+					  &esp32_lcd_cam_rgb_api);

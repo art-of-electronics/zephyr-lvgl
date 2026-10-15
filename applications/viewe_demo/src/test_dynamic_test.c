@@ -104,7 +104,8 @@ int dynamic_test(const struct device *display)
     x = (uint16_t)(max_x / 2U);
     y = (uint16_t)(max_y / 2U);
 
-    LOG_INF("Dynamic partial-write test: 30s, target 20 updates/s, square %ux%u", DYNAMIC_SQUARE_SIZE, DYNAMIC_SQUARE_SIZE);
+    LOG_INF("Dynamic partial-write test: 30s, target 20 updates/s, square %ux%u", 
+            DYNAMIC_SQUARE_SIZE, DYNAMIC_SQUARE_SIZE);
 
     start_ms = k_uptime_get();
     report_start_ms = start_ms;
