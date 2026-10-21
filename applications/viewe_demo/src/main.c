@@ -1,74 +1,71 @@
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/drivers/gpio.h>
-#include <zephyr/drivers/pwm.h>
+#include <zephyr/drivers/led.h>
 #include <zephyr/drivers/display.h>
+#include <zephyr/device.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/logging/log.h>
 
 #include <stdint.h>
+#include <lvgl.h>
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
-#define BACKLIGHT_NODE DT_ALIAS(backlight_pwm)
-#define BACKLIGHT_PWM_NODE DT_CHILD(BACKLIGHT_NODE, backlight)
+#define LVGL_TASK_DELAY_MS  (10U)
+#define SAMUS_ORANGE        (0xF28C28U)
 
-#define FRAMEBUFFER_WIDTH   (800U)
-#define FRAMEBUFFER_HEIGHT  (480U)
-#define FRAMEBUFFER_PIXELS  (FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT)
-#define FRAMEBUFFER_SIZE    (FRAMEBUFFER_PIXELS * sizeof(uint16_t))
-
-static const struct pwm_dt_spec backlight = PWM_DT_SPEC_GET(BACKLIGHT_PWM_NODE);
-
-static int set_brightness(uint32_t percent) {
-	if (percent > 100U) {
-		percent = 100U;
-	}
-
-	uint32_t pulse = (backlight.period * percent) / 100U;
-	return pwm_set_pulse_dt(&backlight, pulse);
-}
-
-extern int samus_orange_smoke_test(const struct device *display);
-extern int dynamic_test(const struct device *display);
+#define BACKLIGHT_NODE       DT_ALIAS(backlight_pwm)
+#define BACKLIGHT_LED_INDEX  (0U)
 
 int main(void)
 {
-	LOG_INF("VIEWE RGB LCD Zephyr RTOS");
+	const struct device *backlight_dev = DEVICE_DT_GET(BACKLIGHT_NODE);
+    const struct device *display_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
+    lv_obj_t *screen = NULL;
+    lv_obj_t *label = NULL;
 
-	const struct device *display = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
+    if (true != device_is_ready(display_dev)) {
+        return -ENODEV;
+    }
 
-	if (!device_is_ready(display)) {
-    	LOG_ERR("LCD RGB display device is not ready");
+	if (true != device_is_ready(backlight_dev)) {
+    	LOG_ERR("Backlight device not ready");
     	return -ENODEV;
 	}
 
-	struct display_capabilities caps;
-
-	display_get_capabilities(display, &caps);
-
-	LOG_INF("Display device: %s", display->name);
-	LOG_INF("Resolution: %u x %u", caps.x_resolution, caps.y_resolution);
-	LOG_INF("Pixel format: 0x%x", caps.current_pixel_format);
+	screen = lv_screen_active();
+	if (NULL == screen) {
+    	LOG_ERR("LVGL active screen is NULL");
+    	return -ENODEV;
+	}
 
 	LOG_INF("LCD RGB started");
 
-	if (!pwm_is_ready_dt(&backlight)) {
-		LOG_ERR("Backlight PWM not ready");
-		return -ENODEV;
+	(void)display_blanking_off(display_dev);
+	(void)led_set_brightness(backlight_dev, BACKLIGHT_LED_INDEX, 35);
+
+	lv_display_t *lv_display = lv_display_get_default();
+	if (NULL == lv_display) {
+    	LOG_ERR("LVGL display not available");
+    	return -ENODEV;
 	}
 
-	set_brightness(35);
-    LOG_INF("BACKLIGHT ON");
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000U), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
 
-	int ret = samus_orange_smoke_test(display);
-	if (0 == ret) {
-    	k_sleep(K_SECONDS(5));
-    	ret = dynamic_test(display);
-	}
+    label = lv_label_create(screen);
+    lv_label_set_text(label, "Zephyr 4.4 x LVGL 9.6");
 
-	while (1) {
-		k_sleep(K_SECONDS(1));
-	}
+	lv_obj_set_style_text_font(label, &lv_font_montserrat_48, LV_PART_MAIN);
+	lv_obj_set_style_text_color(label, lv_color_hex(SAMUS_ORANGE), LV_PART_MAIN);
 
-	return 0;
+	lv_obj_center(label);
+
+    while (true) {
+    	lv_timer_handler();
+    	k_sleep(K_MSEC(LVGL_TASK_DELAY_MS));
+    }
+
+    return 0;
 }
