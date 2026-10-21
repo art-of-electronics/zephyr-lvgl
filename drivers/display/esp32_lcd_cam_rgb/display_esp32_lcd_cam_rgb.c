@@ -615,7 +615,7 @@ static int esp32_lcd_cam_rgb_init(const struct device *dev)
 	const struct esp32_lcd_cam_rgb_config *config = dev->config;
 	int ret = -1;
 
-	data->pixel_format = PIXEL_FORMAT_RGB_565;
+	data->pixel_format = PIXEL_FORMAT_RGB_565X;
 	data->orientation = DISPLAY_ORIENTATION_NORMAL;
 
 	LOG_INF("Initializing ESP32-S3 LCD_CAM RGB display driver");
@@ -732,7 +732,7 @@ static void esp32_lcd_cam_rgb_get_capabilities(const struct device *dev, struct 
 	capabilities->x_resolution = config->width;
 	capabilities->y_resolution = config->height;
 
-	capabilities->supported_pixel_formats = PIXEL_FORMAT_RGB_565;
+	capabilities->supported_pixel_formats = PIXEL_FORMAT_RGB_565X;
 	capabilities->current_pixel_format = data->pixel_format;
 	capabilities->current_orientation = data->orientation;
 }
@@ -750,7 +750,7 @@ static int esp32_lcd_cam_rgb_set_pixel_format(const struct device *dev, const en
 {
 	struct esp32_lcd_cam_rgb_data *data = dev->data;
 
-	if (PIXEL_FORMAT_RGB_565 != pixel_format) {
+	if (PIXEL_FORMAT_RGB_565X != pixel_format) {
 		return -ENOTSUP;
 	}
 
