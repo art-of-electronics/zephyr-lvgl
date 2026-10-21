@@ -1,3 +1,6 @@
+/*****************************************************************************
+                                    INCLUDES
+*****************************************************************************/
 #include <errno.h>
 #include <stdint.h>
 #include <string.h>
@@ -13,19 +16,23 @@
 #include <zephyr/sys/util.h>
 
 #include <esp_clk_tree.h>
+#include <esp_intr_alloc.h>
+#include <soc/interrupts.h>
 #include <hal/dma_types.h>
 #include <hal/gdma_channel.h>
 #include <hal/gdma_ll.h>
 #include <hal/lcd_hal.h>
 #include <hal/lcd_ll.h>
 #include <soc/gdma_struct.h>
+#include <zephyr/multi_heap/shared_multi_heap.h>
 
+/*****************************************************************************
+                          PRIVATE DEFINES / MACROS
+*****************************************************************************/
 #define DT_DRV_COMPAT espressif_esp32_lcd_cam_rgb
 #define LCD_CAM_NODE DT_NODELABEL(lcd_cam)
 #define LCD_DISPLAY_NODE DT_INST(0, DT_DRV_COMPAT)
 #define LCD_TIMINGS_NODE DT_CHILD(LCD_DISPLAY_NODE, display_timings)
-
-#define LCD_TEST_PATTERN_RGB565 (0xFFFFU)
 
 PINCTRL_DT_DEFINE(LCD_CAM_NODE);
 
@@ -49,17 +56,29 @@ LOG_MODULE_REGISTER(esp32_lcd_cam_rgb, CONFIG_DISPLAY_LOG_LEVEL);
 
 #define LCD_DATA_WIDTH              (16U)
 
-#define LCD_DMA_BUFFER_PIXELS   	(4000U)
-#define LCD_DMA_BUFFER_SIZE         (LCD_DMA_BUFFER_PIXELS * sizeof(uint16_t))
+#define LCD_FRAMEBUFFER_PIXELS      (LCD_HACTIVE * LCD_VACTIVE)
+#define LCD_FRAMEBUFFER_SIZE        (LCD_FRAMEBUFFER_PIXELS * sizeof(uint16_t))
 
-#define LCD_DMA_DESC_COUNT          (2U)
-#define LCD_DMA_DESC_SIZE           (LCD_DMA_BUFFER_SIZE / LCD_DMA_DESC_COUNT)
+#define LCD_BOUNCE_LINES            (10U)
+#define LCD_BOUNCE_COUNT            (2U)
+#define LCD_BOUNCE_SIZE             (LCD_HACTIVE * LCD_BOUNCE_LINES * sizeof(uint16_t))
+#define LCD_DMA_DESC_SIZE           (3200U)
+#define LCD_DESCS_PER_BOUNCE        (LCD_BOUNCE_SIZE / LCD_DMA_DESC_SIZE)
+#define LCD_DMA_DESC_COUNT          (LCD_DESCS_PER_BOUNCE * LCD_BOUNCE_COUNT)
+#define LCD_FIFO_SKIP_BYTES         ((LCD_LL_FIFO_DEPTH + 1U) * sizeof(uint16_t))
 
-BUILD_ASSERT((LCD_DMA_DESC_COUNT > 0U), "DMA descriptor count must be nonzero");
-BUILD_ASSERT(0U == (LCD_DMA_BUFFER_SIZE % LCD_DMA_DESC_COUNT), "DMA buffer must be divisible by descriptor count");
+#define LCD_GDMA_PSRAM_BURST_SIZE   (32U)
+#define LCD_GDMA_CACHE_ALIGNMENT    (32U)
+
+BUILD_ASSERT(LCD_FIFO_SKIP_BYTES < LCD_DMA_DESC_SIZE, "FIFO skip must fit one DMA descriptor");
+BUILD_ASSERT(0U < LCD_DMA_DESC_COUNT, "DMA descriptor count must be nonzero");
+BUILD_ASSERT(0U == (LCD_BOUNCE_SIZE % LCD_DMA_DESC_SIZE), "Bounce size must match DMA blocks");
+BUILD_ASSERT(0U == (LCD_VACTIVE % LCD_BOUNCE_LINES), "Display height must match bounce lines");
+BUILD_ASSERT(0U == (LCD_BOUNCE_SIZE % LCD_GDMA_CACHE_ALIGNMENT), "Bounce buffer must be cache aligned");
 BUILD_ASSERT(LCD_DMA_DESC_SIZE <= 4095U, "GDMA descriptor payload exceeds 12-bit size field");
-BUILD_ASSERT(0U == (LCD_DMA_DESC_SIZE % sizeof(uint32_t)), "GDMA descriptor payload must be word-aligned");
-BUILD_ASSERT(LCD_PERIPH_CLOCK_PRE_SCALE > 0U, "LCD peripheral clock prescaler must be nonzero");
+BUILD_ASSERT(0U == (LCD_DMA_DESC_SIZE % LCD_GDMA_PSRAM_BURST_SIZE), "DMA descriptor size must be aligned to PSRAM block size");
+BUILD_ASSERT(0U == (LCD_FRAMEBUFFER_SIZE % LCD_GDMA_CACHE_ALIGNMENT), "Framebuffer size must be cache aligned");
+BUILD_ASSERT(0U < LCD_PERIPH_CLOCK_PRE_SCALE, "LCD peripheral clock prescaler must be nonzero");
 
 #if !DT_NODE_HAS_STATUS(LCD_CAM_NODE, okay)
 #error "LCD_CAM must be enabled in the board devicetree"
@@ -69,22 +88,11 @@ BUILD_ASSERT(LCD_PERIPH_CLOCK_PRE_SCALE > 0U, "LCD peripheral clock prescaler mu
 #define LCD_DMA_CHANNEL             DT_DMAS_CELL_BY_NAME(LCD_CAM_NODE, tx, channel)
 #define LCD_DMA_SLOT                SOC_GDMA_TRIG_PERIPH_LCD0
 
-/*
- * ESP32 GDMA exposes RX/TX as separate Zephyr channels.
- * The hardware channel index is therefore channel / 2.
- */
 #define LCD_GDMA_HW_CHANNEL         (LCD_DMA_CHANNEL / 2U)
 
-/**
- * @brief Immutable RGB display panel configuration.
- *
- * Stores panel-specific parameters retrieved from Devicetree, including
- * display resolution, pixel clock frequency, and horizontal and vertical
- * synchronization timings.
- *
- * The configuration is initialized at compile time and remains unchanged
- * throughout the device lifetime.
- */
+/*****************************************************************************
+                     PRIVATE STRUCTS / ENUMS / VARIABLES
+*****************************************************************************/
 struct esp32_lcd_cam_rgb_config {
 	uint16_t width;
 	uint16_t height;
@@ -98,41 +106,35 @@ struct esp32_lcd_cam_rgb_config {
 };
 
 /**
- * @brief Runtime state of the ESP32-S3 LCD_CAM RGB display driver.
+ * @brief Runtime state of the ESP32-S3 LCD_CAM RGB driver.
  *
- * Stores the LCD_CAM HAL context, DMA device and channel configuration,
- * DMA transfer buffers and descriptors, and the current display state.
- *
- * Unlike the immutable device configuration, this structure contains
- * resources and parameters that may be modified during driver operation.
- *
- * Each driver instance maintains its own runtime state.
+ * @note RGB transmission uses SRAM bounce buffers and a circular GDMA
+ *       descriptor ring. A dedicated restart descriptor is used to
+ *       synchronize transmission with VSYNC.
  */
 struct esp32_lcd_cam_rgb_data {
 	enum display_pixel_format pixel_format;
 	enum display_orientation orientation;
+
 	lcd_hal_context_t hal;
+
 	const struct device *dma_dev;
 	uint32_t dma_channel;
 
-	/* DMA resources belong to the display device and must remain stable. */
-	uint16_t dma_buffer[LCD_DMA_BUFFER_PIXELS] __aligned(32);
+	uint16_t *framebuffer;
+	uint8_t bounce[LCD_BOUNCE_COUNT][LCD_BOUNCE_SIZE] __aligned(32);
+	size_t next_line; 		// Next framebuffer line to copy into a bounce buffer.
+	intr_handle_t lcd_intr_handle;
+
+	dma_descriptor_t restart_desc __aligned(4);
 	dma_descriptor_t dma_desc[LCD_DMA_DESC_COUNT] __aligned(4);
+
 	struct dma_block_config dma_setup_block;
 	struct dma_config dma_config;
 };
 
-/*
- * DMA buffers and descriptors must reside in DMA-accessible memory.
- * Cache alignment and explicit cache flushing are required to ensure
- * data coherency before starting GDMA transfers.
- */
 static struct esp32_lcd_cam_rgb_data lcd_data __aligned(32);
 
-/*
- * This driver implementation supports a single LCD_CAM controller instance
- * (LCD_CAM0). Multi-instance support is not implemented.
- */
 static const struct esp32_lcd_cam_rgb_config lcd_config = {
 	.width = LCD_HACTIVE,
 	.height = LCD_VACTIVE,
@@ -145,15 +147,20 @@ static const struct esp32_lcd_cam_rgb_config lcd_config = {
 	.vfront_porch = LCD_VFRONT_PORCH,
 };
 
+/*****************************************************************************
+                         PRIVATE FUNCTION DECLARATIONS
+*****************************************************************************/
+static void lcd_dma_callback(const struct device *dev, void *user_data, 
+						     uint32_t channel, int status);
+
+
+/*****************************************************************************
+                       PRIVATE FUNCTION IMPLEMENTATIONS
+*****************************************************************************/
 /**
- * @brief Initialize LCD_CAM pin configuration.
- *
- * Applies the default pinctrl state defined in Devicetree for the LCD_CAM
- * peripheral. This configures the GPIO pins required by the RGB interface,
- * including pixel data lines, pixel clock, and synchronization signals.
- *
- * @retval 0 Pin configuration applied successfully.
- * @return Negative error code returned by the pinctrl subsystem on failure.
+ * @brief Initialize the LCD_CAM pin configuration.
+ * 
+ * @return 0 on success, negative error code on failure.
  */
 static int lcd_pinctrl_init(void)
 {
@@ -170,23 +177,11 @@ static int lcd_pinctrl_init(void)
 }
 
 /**
- * @brief Initialize the LCD_CAM clock source and pixel clock divider.
+ * @brief Initialize the LCD_CAM clock configuration.
  *
- * Retrieves the LCD clock source frequency and configures the LCD_CAM
- * peripheral clock using a fixed prescaler.
- *
- * Calculates and applies the pixel clock divider based on the frequency
- * specified in Devicetree. The resulting clock drives the RGB interface
- * and determines the pixel transmission rate.
- *
- * Validates the calculated divider against hardware limitations before
- * applying the clock configuration.
- *
- * @param data Pointer to the driver runtime data.
- * @param config Pointer to the immutable display configuration.
- *
- * @retval 0 Clock configuration completed successfully.
- * @return Negative error code if clock initialization fails.
+ * @param [in] data 	Pointer to the LCD driver runtime data.
+ * @param [in] config 	Pointer to the LCD driver configuration.
+ * @return 0 on success, negative error code on failure.
  */
 static int lcd_clock_init(struct esp32_lcd_cam_rgb_data *data, const struct esp32_lcd_cam_rgb_config *config)
 {
@@ -203,18 +198,17 @@ static int lcd_clock_init(struct esp32_lcd_cam_rgb_data *data, const struct esp3
 		return -EINVAL;
 	}
 
-
 	if (0U == config->pixel_clock) {
-    LOG_ERR("Pixel clock must be nonzero");
-    return -EINVAL;
+		LOG_ERR("Pixel clock must be nonzero");
+		return -EINVAL;
 	}
 
 	lcd_clock_hz = source_clock_hz / LCD_PERIPH_CLOCK_PRE_SCALE;
 	pclk_prescale = DIV_ROUND_UP(lcd_clock_hz, config->pixel_clock);
 
 	if ((0U == pclk_prescale) || (pclk_prescale > LCD_LL_PCLK_DIV_MAX)) {
-    	LOG_ERR("Unsupported pixel clock divider %u", pclk_prescale);
-    	return -EINVAL;
+		LOG_ERR("Unsupported pixel clock divider %u", pclk_prescale);
+		return -EINVAL;
 	}
 
 	/* Apply clock configuration only after successful validation. */
@@ -231,20 +225,10 @@ static int lcd_clock_init(struct esp32_lcd_cam_rgb_data *data, const struct esp3
 }
 
 /**
- * @brief Configure the LCD_CAM RGB interface and panel synchronization timings.
+ * @brief Configure the LCD_CAM RGB synchronization timings.
  *
- * Configures the LCD_CAM peripheral for parallel RGB output, including
- * pixel data width, clock polarity, synchronization signal levels, and
- * horizontal and vertical timing parameters.
- *
- * Applies the HSYNC and VSYNC pulse widths, front and back porch intervals,
- * and active display resolution defined in Devicetree.
- *
- * Enables continuous RGB output and automatic frame restart to support
- * uninterrupted display refresh.
- *
- * @param data Pointer to the driver runtime data.
- * @param config Pointer to the immutable display configuration.
+ * @param [in] data 	Pointer to the LCD driver runtime data.
+ * @param [in] config 	Pointer to the LCD driver configuration.
  */
 static void lcd_timing_init(struct esp32_lcd_cam_rgb_data *data, const struct esp32_lcd_cam_rgb_config *config)
 {
@@ -274,26 +258,11 @@ static void lcd_timing_init(struct esp32_lcd_cam_rgb_data *data, const struct es
 }
 
 /**
- * @brief Initialize and configure the LCD_CAM peripheral.
+ * @brief Initialize the LCD_CAM peripheral and configure RGB output.
  *
- * Enables the LCD_CAM peripheral clock and resets the controller to ensure
- * a known initial hardware state.
- *
- * Initializes the LCD clock source and pixel clock divider, then configures
- * the RGB interface and panel synchronization timings according to the
- * parameters provided in the device configuration.
- *
- * Resets the LCD_CAM controller and its FIFO before applying the RGB timing
- * configuration.
- *
- * This function prepares the LCD_CAM peripheral for operation but does not
- * start pixel data transmission or the GDMA engine.
- *
- * @param data Pointer to the driver runtime data.
- * @param config Pointer to the immutable display configuration.
- *
- * @retval 0 LCD_CAM peripheral initialized successfully.
- * @return Negative error code if clock configuration or initialization fails.
+ * @param [in,out] data  Pointer to the LCD driver runtime data.
+ * @param [in] config    Pointer to the LCD driver configuration.
+ * @return 0 on success, negative error code on failure. 
  */
 static int lcd_cam_init(struct esp32_lcd_cam_rgb_data *data, const struct esp32_lcd_cam_rgb_config *config)
 {
@@ -320,26 +289,12 @@ static int lcd_cam_init(struct esp32_lcd_cam_rgb_data *data, const struct esp32_
 }
 
 /**
- * @brief Initialize the GDMA transmit channel for LCD_CAM.
+ * @brief Initialize and configure the LCD GDMA transmit channel.
  *
- * Retrieves the DMA controller and channel configuration from Devicetree
- * and verifies that the DMA device is ready for operation.
+ * @param [in,out] data Pointer to the LCD driver runtime data.
+ * @return 0 on success, negative error code on failure.
  *
- * Configures the GDMA channel for memory-to-peripheral transfers and
- * assigns the LCD0 peripheral trigger to the selected channel.
- *
- * Translates the Zephyr DMA channel number into the corresponding
- * hardware GDMA TX channel index.
- *
- * The Zephyr DMA API is used to configure the channel and peripheral
- * routing. The actual DMA transfer is started separately using the
- * ESP32 GDMA low-level interface to support circular descriptor chains.
- *
- * @param data Pointer to the driver runtime data.
- *
- * @retval 0 GDMA transmit channel configured successfully.
- * @return Negative error code if the DMA device is unavailable,
- *         the channel configuration is invalid, or DMA setup fails.
+ * @note The LCD requires an odd-numbered Zephyr DMA channel for transmission. 
  */
 static int lcd_dma_channel_init(struct esp32_lcd_cam_rgb_data *data)
 {
@@ -362,20 +317,14 @@ static int lcd_dma_channel_init(struct esp32_lcd_cam_rgb_data *data)
 	memset(&data->dma_setup_block, 0, sizeof(data->dma_setup_block));
 	memset(&data->dma_config, 0, sizeof(data->dma_config));
 
-	/*
-	 * Let Zephyr configure the physical GDMA TX channel and connect it
-	 * to the LCD0 peripheral trigger.
-	 *
-	 * The Zephyr DMA configuration only sets up the channel/trigger.
-	 * Streaming uses the custom circular GDMA descriptor chain below;
-	 * dma_start() is intentionally not called.
-	 */
-	data->dma_setup_block.source_address = (uintptr_t)data->dma_buffer;
+	data->dma_setup_block.source_address = (uintptr_t)&data->bounce[0][0];
 	data->dma_setup_block.block_size = sizeof(uint32_t);
 	data->dma_config.channel_direction = MEMORY_TO_PERIPHERAL;
 	data->dma_config.dma_slot = LCD_DMA_SLOT;
 	data->dma_config.block_count = 1U;
 	data->dma_config.head_block = &data->dma_setup_block;
+	data->dma_config.dma_callback = lcd_dma_callback;
+	data->dma_config.user_data = data;
 
 	ret = dma_config(data->dma_dev, data->dma_channel, &data->dma_config);
 	if (ret < 0) {
@@ -388,71 +337,160 @@ static int lcd_dma_channel_init(struct esp32_lcd_cam_rgb_data *data)
 }
 
 /**
- * @brief Initialize the RGB565 test pattern and circular DMA descriptor chain.
+ * @brief Allocate and initialize the LCD framebuffer in external PSRAM.
  *
- * Fills the DMA buffer with a predefined RGB565 pixel pattern used for
- * display initialization and hardware verification.
+ * @param [in,out] data Pointer to the LCD driver runtime data.
+ * @return 0 on success, negative error code on failure.
  *
- * Divides the buffer into fixed-size blocks and initializes the corresponding
- * GDMA descriptors. Each descriptor specifies the source buffer address,
- * transfer size, buffer ownership, and the address of the next descriptor.
- *
- * Links the last descriptor back to the first one, creating a circular
- * descriptor chain for continuous pixel data transmission.
- *
- * Sets the successful EOF flag on the last descriptor to mark the end
- * of the DMA buffer sequence.
- *
- * Flushes the DMA buffer and descriptor memory from the CPU cache to ensure
- * that the GDMA controller accesses the initialized data.
- *
- * This function only prepares the DMA resources. It does not start
- * the GDMA engine or LCD_CAM pixel transmission.
- *
- * @param data Pointer to the driver runtime data.
+ * @note The framebuffer must be aligned to the GDMA PSRAM burst size.
  */
-static void lcd_dma_ring_init(struct esp32_lcd_cam_rgb_data *data)
+static int lcd_framebuffer_init(struct esp32_lcd_cam_rgb_data *data)
 {
-	uintptr_t buffer_addr = (uintptr_t)data->dma_buffer;
+	data->framebuffer = shared_multi_heap_alloc(
+		SMH_REG_ATTR_EXTERNAL, LCD_FRAMEBUFFER_SIZE);
 
-	for (size_t i = 0; i < ARRAY_SIZE(data->dma_buffer); ++i) {
-		data->dma_buffer[i] = LCD_TEST_PATTERN_RGB565;
+	if (NULL == data->framebuffer) {
+		LOG_ERR("Failed to allocate framebuffer in PSRAM");
+		return -ENOMEM;
 	}
 
-	memset(data->dma_desc, 0, sizeof(data->dma_desc));
+	if (0U != ((uintptr_t)data->framebuffer % LCD_GDMA_PSRAM_BURST_SIZE)) {
+		LOG_ERR("Framebuffer is not aligned to %u bytes",
+			LCD_GDMA_PSRAM_BURST_SIZE);
 
-	for (size_t i = 0; i < LCD_DMA_DESC_COUNT; ++i) {
-		data->dma_desc[i].buffer = (void *)(buffer_addr + (i * LCD_DMA_DESC_SIZE));
-		data->dma_desc[i].dw0.size = LCD_DMA_DESC_SIZE;
-		data->dma_desc[i].dw0.length = LCD_DMA_DESC_SIZE;
-		data->dma_desc[i].dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
-		data->dma_desc[i].dw0.suc_eof = (i == (LCD_DMA_DESC_COUNT - 1U));
-		data->dma_desc[i].next = &data->dma_desc[(i + 1U) % LCD_DMA_DESC_COUNT];
+		shared_multi_heap_free(data->framebuffer);
+		data->framebuffer = NULL;
+
+		return -EINVAL;
 	}
 
-	sys_cache_data_flush_range(data->dma_buffer, sizeof(data->dma_buffer));
-	sys_cache_data_flush_range(data->dma_desc, sizeof(data->dma_desc));
+	memset(data->framebuffer, 0, LCD_FRAMEBUFFER_SIZE);
 
-	LOG_INF("LCD DMA ring prepared: %u descriptors, %u bytes", LCD_DMA_DESC_COUNT, LCD_DMA_BUFFER_SIZE);
+	sys_cache_data_flush_range(data->framebuffer, LCD_FRAMEBUFFER_SIZE);
+
+	LOG_INF("PSRAM framebuffer initialized: %u bytes at %p",
+		(unsigned int)LCD_FRAMEBUFFER_SIZE,
+		(void *)data->framebuffer);
+
+	return 0;
 }
 
 /**
- * @brief Start continuous GDMA transfers and RGB signal generation.
+ * @brief Fill the selected DMA bounce buffer with framebuffer data.
  *
- * Stops the LCD_CAM controller and resets its internal state and FIFO
- * before starting a new pixel transmission sequence.
+ * @param [in,out] data Pointer to the LCD driver runtime data.
+ * @param [in] index     Index of the destination bounce buffer.
  *
- * Configures the GDMA transmit channel with the address of the first
- * descriptor in the circular DMA chain and starts the DMA engine.
+ * @note Copies a slice from external PSRAM to internal SRAM for GDMA transfer.
+ */
+static void lcd_bounce_fill(struct esp32_lcd_cam_rgb_data *data, size_t index)
+{
+	size_t offset = data->next_line * LCD_HACTIVE * sizeof(uint16_t);
+
+	memcpy(data->bounce[index], (const uint8_t *)data->framebuffer + offset, LCD_BOUNCE_SIZE);
+	/* Internal SRAM bounce buffers are accessed directly by GDMA. */
+	data->next_line = (data->next_line + LCD_BOUNCE_LINES) % LCD_VACTIVE;
+}
+
+/**
+ * @brief Handle GDMA transfer completion and refill the corresponding bounce buffer.
  *
- * Ensures that the GDMA engine is started before enabling the LCD_CAM
- * controller, maintaining the required hardware initialization sequence.
+ * @param [in] dev       		Pointer to the DMA controller device.
+ * @param [in,out] user_data 	Pointer to the LCD driver runtime data.
+ * @param [in] channel   		DMA channel number.
+ * @param [in] status    		DMA transfer status.
  *
- * Once started, GDMA continuously supplies RGB565 pixel data to LCD_CAM,
- * while the peripheral generates the pixel clock and synchronization
- * signals required by the display panel.
+ * @note Runs in interrupt context using Zephyr's existing GDMA ISR.
+ */
+static void lcd_dma_callback(const struct device *dev, void *user_data, uint32_t channel, int status)
+{
+	struct esp32_lcd_cam_rgb_data *data = user_data;
+	uint32_t eof_addr = 0U;
+	size_t index = 0U;
+
+	ARG_UNUSED(dev);
+	ARG_UNUSED(channel);
+
+	if (0 != status) {
+		return;
+	}
+
+	eof_addr = gdma_ll_tx_get_eof_desc_addr(&GDMA, LCD_GDMA_HW_CHANNEL);
+
+	if (eof_addr == (uint32_t)(uintptr_t)&data->dma_desc[LCD_DESCS_PER_BOUNCE - 1U]) {
+		index = 0U;
+	} else if (eof_addr == (uint32_t)(uintptr_t)&data->dma_desc[LCD_DMA_DESC_COUNT - 1U]) {
+		index = 1U;
+	} else {
+		return;
+	}
+
+	lcd_bounce_fill(data, index);
+}
+
+/**
+ * @brief Initialize the GDMA descriptor used to restart RGB transmission.
  *
- * @param data Pointer to the driver runtime data.
+ * @param [in,out] data Pointer to the LCD driver runtime data.
+ *
+ * @note Based on the ESP-IDF esp_lcd_panel_rgb.c restart mechanism.
+ * 		 The restart descriptor skips the LCD_CAM FIFO depth plus one pixel
+ *       to preserve FIFO contents during transmission restart. Subsequent
+ *       descriptors continue through the regular DMA descriptor ring.
+ */
+static void lcd_restart_desc_init(struct esp32_lcd_cam_rgb_data *data)
+{
+	memset(&data->restart_desc, 0, sizeof(data->restart_desc));
+	data->restart_desc.buffer = &data->bounce[0][LCD_FIFO_SKIP_BYTES];
+	data->restart_desc.dw0.size = LCD_DMA_DESC_SIZE - LCD_FIFO_SKIP_BYTES;
+	data->restart_desc.dw0.length = LCD_DMA_DESC_SIZE - LCD_FIFO_SKIP_BYTES;
+	data->restart_desc.dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
+	data->restart_desc.dw0.suc_eof = 0;
+	data->restart_desc.next = &data->dma_desc[1];
+	sys_cache_data_flush_range(&data->restart_desc, sizeof(data->restart_desc));
+}
+
+/**
+ * @brief Initialize the circular GDMA descriptor ring for RGB transmission.
+ *
+ * @param [in,out] data Pointer to the LCD driver runtime data.
+ *
+ * @note The descriptor ring alternates between two SRAM bounce buffers.
+ *       The final descriptor links back to the first, enabling continuous
+ *       DMA transmission.
+ */
+static void lcd_dma_ring_init(struct esp32_lcd_cam_rgb_data *data)
+{
+	memset(data->dma_desc, 0, sizeof(data->dma_desc));
+	data->next_line = 0U;
+
+	lcd_bounce_fill(data, 0U);
+	lcd_bounce_fill(data, 1U);
+
+	for (size_t i = 0U; i < LCD_DMA_DESC_COUNT; ++i) {
+		size_t bounce_index = i / LCD_DESCS_PER_BOUNCE;
+		size_t bounce_offset = (i % LCD_DESCS_PER_BOUNCE) * LCD_DMA_DESC_SIZE;
+
+		data->dma_desc[i].buffer = &data->bounce[bounce_index][bounce_offset];
+		data->dma_desc[i].dw0.size = LCD_DMA_DESC_SIZE;
+		data->dma_desc[i].dw0.length = LCD_DMA_DESC_SIZE;
+		data->dma_desc[i].dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
+		data->dma_desc[i].dw0.suc_eof = ((i % LCD_DESCS_PER_BOUNCE) == (LCD_DESCS_PER_BOUNCE - 1U));
+		data->dma_desc[i].next = &data->dma_desc[(i + 1U) % LCD_DMA_DESC_COUNT];
+	}
+
+	sys_cache_data_flush_range(data->dma_desc, sizeof(data->dma_desc));
+	lcd_restart_desc_init(data);
+	LOG_INF("SRAM bounce DMA ring: %u descriptors, %u bytes per buffer", LCD_DMA_DESC_COUNT, LCD_BOUNCE_SIZE);
+}
+
+/**
+ * @brief Start continuous LCD_CAM RGB transmission using GDMA.
+ *
+ * @param [in] data Pointer to the LCD driver runtime data.
+ *
+ * @note The GDMA TX interrupt is managed by Zephyr. No additional
+ *       interrupt registration is required.
  */
 static void lcd_rgb_start(struct esp32_lcd_cam_rgb_data *data)
 {
@@ -462,6 +500,11 @@ static void lcd_rgb_start(struct esp32_lcd_cam_rgb_data *data)
 	lcd_ll_reset(dev);
 	lcd_ll_fifo_reset(dev);
 
+	lcd_ll_clear_interrupt_status(dev, LCD_LL_EVENT_VSYNC_END);
+	/* Enable TX_EOF only; Zephyr owns and dispatches the hardware IRQ. */
+	gdma_ll_tx_clear_interrupt_status(&GDMA, LCD_GDMA_HW_CHANNEL, GDMA_LL_EVENT_TX_EOF);
+	gdma_ll_tx_enable_interrupt(&GDMA, LCD_GDMA_HW_CHANNEL, GDMA_LL_EVENT_TX_EOF, true);
+	gdma_ll_tx_enable_data_burst(&GDMA, LCD_GDMA_HW_CHANNEL, false);
 	gdma_ll_tx_set_desc_addr(&GDMA, LCD_GDMA_HW_CHANNEL, (uint32_t)(uintptr_t)data->dma_desc);
 	gdma_ll_tx_start(&GDMA, LCD_GDMA_HW_CHANNEL);
 
@@ -473,29 +516,98 @@ static void lcd_rgb_start(struct esp32_lcd_cam_rgb_data *data)
 }
 
 /**
+ * @brief Handle LCD_CAM VSYNC and restart GDMA transmission.
+ *
+ * @param [in,out] arg Pointer to the LCD driver runtime data.
+ *
+ * @note Implements the ESP32-S3 VSYNC recovery mechanism based on ESP-IDF
+ *       v5.4.2. The restart preserves the required FIFO pixel offset
+ *       and synchronizes bounce buffer refilling with frame boundaries.
+ *
+ * @note The LCD FIFO must be reset before the GDMA channel is restarted.
+ *       Do not stop the LCD timing engine or invoke Zephyr DMA API
+ *       functions from this interrupt handler.
+ */
+static void lcd_vsync_isr(void *arg)
+{
+	struct esp32_lcd_cam_rgb_data *data = arg;
+	lcd_cam_dev_t *dev = data->hal.dev;
+	const uint32_t status = lcd_ll_get_interrupt_status(dev);
+
+	lcd_ll_clear_interrupt_status(dev, status);
+	if (0U == (status & LCD_LL_EVENT_VSYNC_END)) {
+		return;
+	}
+
+	/* ESP-IDF: position beyond the first two bounce buffers means we
+	 * have not preloaded the upcoming frame yet. Start at its origin.
+	 */
+	if (data->next_line > (LCD_BOUNCE_COUNT * LCD_BOUNCE_LINES)) {
+		data->next_line = 0U;
+	}
+
+	if (data->next_line < LCD_BOUNCE_LINES) {
+		lcd_bounce_fill(data, 0U);
+	}
+
+	/* ESP32-S3: restart from a dedicated descriptor that skips the LCD
+	 * FIFO-preserved pixels. Follow ESP-IDF: reset FIFO, reset GDMA,
+	 * and restart descriptors without stopping the LCD timing engine.
+	 * Do not invoke Zephyr dma_stop()/dma_start() from this interrupt.
+	 */
+	lcd_ll_fifo_reset(dev);
+	gdma_ll_tx_reset_channel(&GDMA, LCD_GDMA_HW_CHANNEL);
+	gdma_ll_tx_set_desc_addr(&GDMA, LCD_GDMA_HW_CHANNEL, (uint32_t)(uintptr_t)&data->restart_desc);
+	gdma_ll_tx_start(&GDMA, LCD_GDMA_HW_CHANNEL);
+
+	if (data->next_line < (LCD_BOUNCE_COUNT * LCD_BOUNCE_LINES)) {
+		lcd_bounce_fill(data, 1U);
+	}
+
+}
+
+/**
+ * @brief Register and enable the LCD_CAM VSYNC interrupt handler.
+ *
+ * @param [in,out] data Pointer to the LCD driver runtime data.
+ * @return 0 on success, negative error code on failure.
+ *
+ * @note The interrupt is allocated in a disabled state and enabled
+ *       only after configuring the LCD_CAM VSYNC interrupt source.
+ */
+static int lcd_vsync_irq_init(struct esp32_lcd_cam_rgb_data *data)
+{
+	int ret = esp_intr_alloc(ETS_LCD_CAM_INTR_SOURCE,
+		ESP_INTR_FLAG_INTRDISABLED, lcd_vsync_isr, data,
+		&data->lcd_intr_handle);
+
+	if (ESP_OK != ret) {
+		LOG_ERR("LCD_CAM IRQ allocation failed (%d)", ret);
+		return -EIO;
+	}
+
+	lcd_ll_clear_interrupt_status(data->hal.dev, LCD_LL_EVENT_VSYNC_END);
+	lcd_ll_enable_interrupt(data->hal.dev, LCD_LL_EVENT_VSYNC_END, true);
+	ret = esp_intr_enable(data->lcd_intr_handle);
+	if (ESP_OK != ret) {
+		lcd_ll_enable_interrupt(data->hal.dev, LCD_LL_EVENT_VSYNC_END, false);
+		(void)esp_intr_free(data->lcd_intr_handle);
+		data->lcd_intr_handle = NULL;
+		LOG_ERR("LCD_CAM IRQ enable failed (%d)", ret);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+/**
  * @brief Initialize the ESP32-S3 LCD_CAM RGB display driver.
  *
- * Initializes the LCD_CAM peripheral and GDMA subsystem, configures the
- * display interface, and starts continuous transmission of the RGB565
- * test pattern.
+ * @param [in] dev Pointer to the display device instance.
+ * @return 0 on success, negative error code on failure.
  *
- * The initialization sequence is executed in a controlled order:
- * - Configure LCD_CAM GPIO pins using the Devicetree pinctrl settings.
- * - Initialize the LCD_CAM clock source and RGB synchronization timings.
- * - Configure the GDMA transmit channel and LCD0 peripheral trigger.
- * - Prepare the RGB565 test buffer and circular DMA descriptor chain.
- * - Start GDMA transfers and enable the LCD_CAM RGB output.
- *
- * Each initialization stage is executed only after the preceding stage
- * has completed successfully. Any reported error terminates initialization
- * and is propagated to the caller.
- *
- * The display backlight is not controlled by this function.
- *
- * @param dev Pointer to the display device instance.
- *
- * @retval 0 Display driver initialized successfully.
- * @return Negative error code if initialization fails.
+ * @note Initializes the LCD_CAM peripheral, allocates the framebuffer,
+ *       configures GDMA and VSYNC interrupts, and starts RGB transmission.
  */
 static int esp32_lcd_cam_rgb_init(const struct device *dev)
 {
@@ -519,13 +631,29 @@ static int esp32_lcd_cam_rgb_init(const struct device *dev)
 		return ret;
 	}
 
+	ret = lcd_framebuffer_init(data);
+	if (ret < 0) {
+		LOG_ERR("Framebuffer initialization failed: %d", ret);
+		return ret;
+	}
+
 	ret = lcd_dma_channel_init(data);
 	if (ret < 0) {
 		LOG_ERR("GDMA initialization failed: %d", ret);
+
+		shared_multi_heap_free(data->framebuffer);
+		data->framebuffer = NULL;
+
 		return ret;
 	}
 
 	lcd_dma_ring_init(data);
+	ret = lcd_vsync_irq_init(data);
+	if (ret < 0) {
+		shared_multi_heap_free(data->framebuffer);
+		data->framebuffer = NULL;
+		return ret;
+	}
 	lcd_rgb_start(data);
 
 	LOG_INF("LCD_CAM RGB initialized: %ux%u", config->width, config->height);
@@ -533,47 +661,66 @@ static int esp32_lcd_cam_rgb_init(const struct device *dev)
 }
 
 /**
- * @brief Write pixel data to the display.
+ * @brief Write RGB565 pixel data to the LCD framebuffer.
  *
- * This function is currently a placeholder for the framebuffer-based
- * display update mechanism.
+ * @param [in] dev  Pointer to the display device instance.
+ * @param [in] x    Horizontal coordinate of the destination area.
+ * @param [in] y    Vertical coordinate of the destination area.
+ * @param [in] desc	Pointer to the source buffer descriptor.
+ * @param [in] buf 	Pointer to the source pixel data.
+ * @return 0 on success, -EINVAL on invalid parameters.
  *
- * @param dev Pointer to the display device instance.
- * @param x Horizontal coordinate of the target region.
- * @param y Vertical coordinate of the target region.
- * @param desc Pointer to the display buffer descriptor.
- * @param buf Pointer to the source pixel data.
- *
- * @retval -ENOTSUP Framebuffer writes are not implemented yet.
- *
- * @todo Implement framebuffer updates with RGB565 pixel data,
- *       DMA synchronization, and frame-safe buffer switching.
+ * @note Supports partial framebuffer updates and source buffers with
+ *       a configurable row pitch. The entire framebuffer cache is
+ *       flushed after each write.
  */
-static int esp32_lcd_cam_rgb_write(const struct device *dev, const uint16_t x, const uint16_t y, 
-								   const struct display_buffer_descriptor *desc, const void *buf)
+static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_t y,
+                                   const struct display_buffer_descriptor *desc, const void *buf)
 {
-	ARG_UNUSED(dev);
-	ARG_UNUSED(x);
-	ARG_UNUSED(y);
-	ARG_UNUSED(desc);
-	ARG_UNUSED(buf);
+    struct esp32_lcd_cam_rgb_data *data = dev->data;
+    const struct esp32_lcd_cam_rgb_config *config = dev->config;
+    size_t source_stride = 0U;
+    size_t row_bytes = 0U;
 
-	return -ENOTSUP;
+    if ((NULL == desc) || (NULL == buf) || (NULL == data->framebuffer)) {
+        return -EINVAL;
+    }
+
+    if ((0U == desc->width) || (0U == desc->height) || (desc->pitch < desc->width)) {
+        return -EINVAL;
+    }
+
+    if (((uint32_t)x + desc->width > config->width) ||
+        ((uint32_t)y + desc->height > config->height)) {
+        return -EINVAL;
+    }
+
+    source_stride = (size_t)desc->pitch * sizeof(uint16_t);
+    row_bytes = (size_t)desc->width * sizeof(uint16_t);
+
+    if ((source_stride > SIZE_MAX / desc->height) ||
+        (desc->buf_size < (((size_t)desc->height - 1U) * source_stride + row_bytes))) {
+        return -EINVAL;
+    }
+
+    for (size_t row = 0U; row < desc->height; ++row) {
+        uint16_t *dst = &data->framebuffer[((size_t)y + row) * config->width + x];
+        const uint8_t *src = (const uint8_t *)buf + row * source_stride;
+
+        memcpy(dst, src, row_bytes);
+    }
+
+    /* Preserve the validated framebuffer cache handling for this revision. */
+    sys_cache_data_flush_range(data->framebuffer, LCD_FRAMEBUFFER_SIZE);
+
+    return 0;
 }
 
 /**
- * @brief Retrieve the display capabilities.
+ * @brief Retrieve the LCD display capabilities.
  *
- * Reports the display resolution defined in Devicetree and the pixel
- * formats and orientation supported by the driver.
- *
- * The current implementation supports RGB565 pixel format and normal
- * display orientation only.
- *
- * This function does not modify the display configuration or hardware state.
- *
- * @param dev Pointer to the display device instance.
- * @param capabilities Pointer to the structure receiving display capabilities.
+ * @param [in] dev           	Pointer to the display device instance.
+ * @param [out] capabilities	Pointer to the display capabilities structure.
  */
 static void esp32_lcd_cam_rgb_get_capabilities(const struct device *dev, struct display_capabilities *capabilities)
 {
@@ -591,18 +738,13 @@ static void esp32_lcd_cam_rgb_get_capabilities(const struct device *dev, struct 
 }
 
 /**
- * @brief Set the display pixel format.
+ * @brief Set the LCD display pixel format.
  *
- * Configures the pixel format used by the display driver.
+ * @param [in] dev          Pointer to the display device instance.
+ * @param [in] pixel_format	Requested pixel format.
+ * @return 0 on success, -ENOTSUP if the requested format is unsupported.
  *
- * The current implementation supports RGB565 only. Requests for other
- * pixel formats are rejected without modifying the driver state.
- *
- * @param dev Pointer to the display device instance.
- * @param pixel_format Requested display pixel format.
- *
- * @retval 0 Pixel format accepted successfully.
- * @retval -ENOTSUP Requested pixel format is not supported.
+ * @note Only RGB565 pixel format is supported.
  */
 static int esp32_lcd_cam_rgb_set_pixel_format(const struct device *dev, const enum display_pixel_format pixel_format)
 {
@@ -618,20 +760,13 @@ static int esp32_lcd_cam_rgb_set_pixel_format(const struct device *dev, const en
 }
 
 /**
- * @brief Set the display orientation.
+ * @brief Set the LCD display orientation.
  *
- * Validates the requested display orientation against the orientations
- * supported by the driver.
+ * @param [in] dev         	Pointer to the display device instance.
+ * @param [in] orientation	Requested display orientation.
+ * @return 0 on success, -ENOTSUP if the requested orientation is unsupported.
  *
- * The current implementation supports normal orientation only.
- * Requests for other orientations are rejected without modifying
- * the driver state.
- *
- * @param dev Pointer to the display device instance.
- * @param orientation Requested display orientation.
- *
- * @retval 0 Display orientation accepted successfully.
- * @retval -ENOTSUP Requested orientation is not supported.
+ * @note Only the normal display orientation is supported.
  */
 static int esp32_lcd_cam_rgb_set_orientation(const struct device *dev, const enum display_orientation orientation)
 {
@@ -646,6 +781,10 @@ static int esp32_lcd_cam_rgb_set_orientation(const struct device *dev, const enu
 	return 0;
 }
 
+/*****************************************************************************
+                            DEVICE REGISTRATION
+*****************************************************************************/
+
 static DEVICE_API(display, esp32_lcd_cam_rgb_api) = {
 	.write = esp32_lcd_cam_rgb_write,
 	.get_capabilities = esp32_lcd_cam_rgb_get_capabilities,
@@ -653,5 +792,6 @@ static DEVICE_API(display, esp32_lcd_cam_rgb_api) = {
 	.set_orientation = esp32_lcd_cam_rgb_set_orientation,
 };
 
-DEVICE_DT_INST_DEFINE(0, esp32_lcd_cam_rgb_init, NULL, &lcd_data, &lcd_config, POST_KERNEL,
-			          CONFIG_DISPLAY_INIT_PRIORITY, &esp32_lcd_cam_rgb_api);
+DEVICE_DT_INST_DEFINE(0, esp32_lcd_cam_rgb_init, NULL, &lcd_data, &lcd_config, 
+					  POST_KERNEL, CONFIG_DISPLAY_INIT_PRIORITY, 
+					  &esp32_lcd_cam_rgb_api);

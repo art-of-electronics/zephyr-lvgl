@@ -5,10 +5,17 @@
 #include <zephyr/drivers/display.h>
 #include <zephyr/logging/log.h>
 
+#include <stdint.h>
+
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 #define BACKLIGHT_NODE DT_ALIAS(backlight_pwm)
 #define BACKLIGHT_PWM_NODE DT_CHILD(BACKLIGHT_NODE, backlight)
+
+#define FRAMEBUFFER_WIDTH   (800U)
+#define FRAMEBUFFER_HEIGHT  (480U)
+#define FRAMEBUFFER_PIXELS  (FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT)
+#define FRAMEBUFFER_SIZE    (FRAMEBUFFER_PIXELS * sizeof(uint16_t))
 
 static const struct pwm_dt_spec backlight = PWM_DT_SPEC_GET(BACKLIGHT_PWM_NODE);
 
@@ -18,30 +25,29 @@ static int set_brightness(uint32_t percent) {
 	}
 
 	uint32_t pulse = (backlight.period * percent) / 100U;
-
 	return pwm_set_pulse_dt(&backlight, pulse);
 }
 
+extern int samus_orange_smoke_test(const struct device *display);
+extern int dynamic_test(const struct device *display);
+
 int main(void)
 {
-	LOG_INF("VIEWE RGB LCD smoke test");
+	LOG_INF("VIEWE RGB LCD Zephyr RTOS");
 
-	const struct device *display_dev =
-    DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
+	const struct device *display = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
 
-	if (!device_is_ready(display_dev)) {
+	if (!device_is_ready(display)) {
     	LOG_ERR("LCD RGB display device is not ready");
     	return -ENODEV;
 	}
 
 	struct display_capabilities caps;
 
-	display_get_capabilities(display_dev, &caps);
+	display_get_capabilities(display, &caps);
 
-	LOG_INF("Display device: %s", display_dev->name);
-	LOG_INF("Resolution: %u x %u",
-        caps.x_resolution,
-        caps.y_resolution);
+	LOG_INF("Display device: %s", display->name);
+	LOG_INF("Resolution: %u x %u", caps.x_resolution, caps.y_resolution);
 	LOG_INF("Pixel format: 0x%x", caps.current_pixel_format);
 
 	LOG_INF("LCD RGB started");
@@ -53,6 +59,12 @@ int main(void)
 
 	set_brightness(35);
     LOG_INF("BACKLIGHT ON");
+
+	int ret = samus_orange_smoke_test(display);
+	if (0 == ret) {
+    	k_sleep(K_SECONDS(5));
+    	ret = dynamic_test(display);
+	}
 
 	while (1) {
 		k_sleep(K_SECONDS(1));
