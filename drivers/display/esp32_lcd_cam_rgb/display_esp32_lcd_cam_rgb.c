@@ -26,6 +26,8 @@
 #include <soc/gdma_struct.h>
 #include <zephyr/multi_heap/shared_multi_heap.h>
 
+#include <zephyr/sys/atomic.h>
+
 /*****************************************************************************
                           PRIVATE DEFINES / MACROS
 *****************************************************************************/
@@ -90,6 +92,9 @@ BUILD_ASSERT(0U < LCD_PERIPH_CLOCK_PRE_SCALE, "LCD peripheral clock prescaler mu
 
 #define LCD_GDMA_HW_CHANNEL         (LCD_DMA_CHANNEL / 2U)
 
+#define LCD_STATS_INTERVAL_MS (1000U)
+#define LCD_EXPECTED_EOF_PER_FRAME (LCD_VACTIVE / LCD_BOUNCE_LINES)
+
 /*****************************************************************************
                      PRIVATE STRUCTS / ENUMS / VARIABLES
 *****************************************************************************/
@@ -131,6 +136,16 @@ struct esp32_lcd_cam_rgb_data {
 
 	struct dma_block_config dma_setup_block;
 	struct dma_config dma_config;
+
+	atomic_t fill_max_cycles;
+	atomic_t dma_eof_count;
+	atomic_t dma_unexpected_eof_count;
+	atomic_t dma_error_count;
+	atomic_t vsync_count;
+
+	uint32_t last_stats_ms;
+	atomic_t debug_eof_addr;
+	size_t bb_eof_count;
 };
 
 static struct esp32_lcd_cam_rgb_data lcd_data __aligned(32);
@@ -385,11 +400,26 @@ static int lcd_framebuffer_init(struct esp32_lcd_cam_rgb_data *data)
  */
 static void lcd_bounce_fill(struct esp32_lcd_cam_rgb_data *data, size_t index)
 {
-	size_t offset = data->next_line * LCD_HACTIVE * sizeof(uint16_t);
+    size_t offset = data->next_line * LCD_HACTIVE * sizeof(uint16_t);
+    uint32_t start_cycles = 0U;
+    uint32_t elapsed_cycles = 0U;
+    atomic_val_t max_cycles = 0;
 
-	memcpy(data->bounce[index], (const uint8_t *)data->framebuffer + offset, LCD_BOUNCE_SIZE);
-	/* Internal SRAM bounce buffers are accessed directly by GDMA. */
-	data->next_line = (data->next_line + LCD_BOUNCE_LINES) % LCD_VACTIVE;
+    start_cycles = k_cycle_get_32();
+
+    memcpy(data->bounce[index], (const uint8_t *)data->framebuffer + offset, LCD_BOUNCE_SIZE);
+
+    elapsed_cycles = k_cycle_get_32() - start_cycles;
+    max_cycles = atomic_get(&data->fill_max_cycles);
+    while ((atomic_val_t)elapsed_cycles > max_cycles) {
+        if (true == atomic_cas(&data->fill_max_cycles, max_cycles, (atomic_val_t)elapsed_cycles)) {
+            break;
+        }
+
+        max_cycles = atomic_get(&data->fill_max_cycles);
+    }
+
+    data->next_line = (data->next_line + LCD_BOUNCE_LINES) % LCD_VACTIVE;
 }
 
 /**
@@ -402,30 +432,26 @@ static void lcd_bounce_fill(struct esp32_lcd_cam_rgb_data *data, size_t index)
  *
  * @note Runs in interrupt context using Zephyr's existing GDMA ISR.
  */
-static void lcd_dma_callback(const struct device *dev, void *user_data, uint32_t channel, int status)
+static void lcd_dma_callback(const struct device *dev, void *user_data,
+                             uint32_t channel, int status)
 {
-	struct esp32_lcd_cam_rgb_data *data = user_data;
-	uint32_t eof_addr = 0U;
-	size_t index = 0U;
+    struct esp32_lcd_cam_rgb_data *data = user_data;
+    size_t index = 0U;
 
-	ARG_UNUSED(dev);
-	ARG_UNUSED(channel);
+    ARG_UNUSED(dev);
+    ARG_UNUSED(channel);
 
-	if (0 != status) {
-		return;
-	}
+    if (0 != status) {
+        atomic_inc(&data->dma_error_count);
+        return;
+    }
 
-	eof_addr = gdma_ll_tx_get_eof_desc_addr(&GDMA, LCD_GDMA_HW_CHANNEL);
+    index = data->bb_eof_count % LCD_BOUNCE_COUNT;
+    data->bb_eof_count++;
 
-	if (eof_addr == (uint32_t)(uintptr_t)&data->dma_desc[LCD_DESCS_PER_BOUNCE - 1U]) {
-		index = 0U;
-	} else if (eof_addr == (uint32_t)(uintptr_t)&data->dma_desc[LCD_DMA_DESC_COUNT - 1U]) {
-		index = 1U;
-	} else {
-		return;
-	}
+    atomic_inc(&data->dma_eof_count);
 
-	lcd_bounce_fill(data, index);
+    lcd_bounce_fill(data, index);
 }
 
 /**
@@ -533,11 +559,14 @@ static void lcd_vsync_isr(void *arg)
 	struct esp32_lcd_cam_rgb_data *data = arg;
 	lcd_cam_dev_t *dev = data->hal.dev;
 	const uint32_t status = lcd_ll_get_interrupt_status(dev);
+	size_t frame_eof_count = 0U;
 
 	lcd_ll_clear_interrupt_status(dev, status);
 	if (0U == (status & LCD_LL_EVENT_VSYNC_END)) {
 		return;
 	}
+
+	atomic_inc(&data->vsync_count);
 
 	/* ESP-IDF: position beyond the first two bounce buffers means we
 	 * have not preloaded the upcoming frame yet. Start at its origin.
@@ -548,6 +577,13 @@ static void lcd_vsync_isr(void *arg)
 
 	if (data->next_line < LCD_BOUNCE_LINES) {
 		lcd_bounce_fill(data, 0U);
+	}
+
+	frame_eof_count = data->bb_eof_count;
+	data->bb_eof_count = 0U;
+
+	if (frame_eof_count >= LCD_EXPECTED_EOF_PER_FRAME) {
+    	return;
 	}
 
 	/* ESP32-S3: restart from a dedicated descriptor that skips the LCD
@@ -563,7 +599,6 @@ static void lcd_vsync_isr(void *arg)
 	if (data->next_line < (LCD_BOUNCE_COUNT * LCD_BOUNCE_LINES)) {
 		lcd_bounce_fill(data, 1U);
 	}
-
 }
 
 /**
@@ -703,15 +738,34 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
         return -EINVAL;
     }
 
-    for (size_t row = 0U; row < desc->height; ++row) {
-        uint16_t *dst = &data->framebuffer[((size_t)y + row) * config->width + x];
-        const uint8_t *src = (const uint8_t *)buf + row * source_stride;
+	for (size_t row = 0U; row < desc->height; ++row) {
+    	uint16_t *dst = &data->framebuffer[((size_t)y + row) * config->width + x];
+    	const uint8_t *src = (const uint8_t *)buf + row * source_stride;
 
-        memcpy(dst, src, row_bytes);
-    }
+    	memcpy(dst, src, row_bytes);
 
-    /* Preserve the validated framebuffer cache handling for this revision. */
-    sys_cache_data_flush_range(data->framebuffer, LCD_FRAMEBUFFER_SIZE);
+    	sys_cache_data_flush_range(dst, row_bytes);
+	}
+
+	uint32_t now_ms = k_uptime_get_32();
+
+	if ((now_ms - data->last_stats_ms) >= LCD_STATS_INTERVAL_MS) {
+    	uint32_t max_cycles = (uint32_t)atomic_get(&data->fill_max_cycles);
+    	uint32_t max_us = k_cyc_to_us_floor32(max_cycles);
+
+    	data->last_stats_ms = now_ms;
+
+    	LOG_INF("LCD: fill_max=%u us, EOF=%d, VSYNC=%d, unknown=%d, errors=%d",
+            max_us,
+            (int)atomic_get(&data->dma_eof_count),
+            (int)atomic_get(&data->vsync_count),
+            (int)atomic_get(&data->dma_unexpected_eof_count),
+            (int)atomic_get(&data->dma_error_count));
+		LOG_INF("GDMA EOF: actual=0x%08x expected=0x%08x / 0x%08x",
+        (uint32_t)atomic_get(&data->debug_eof_addr),
+        (uint32_t)(uintptr_t)&data->dma_desc[LCD_DESCS_PER_BOUNCE - 1U],
+        (uint32_t)(uintptr_t)&data->dma_desc[LCD_DMA_DESC_COUNT - 1U]);
+}
 
     return 0;
 }
