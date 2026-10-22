@@ -26,7 +26,17 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 #define BACKLIGHT_NODE       DT_ALIAS(backlight_pwm)
 #define BACKLIGHT_LED_INDEX  (0U)
 
-#define VERSION_TEXT_SIZE (64U)
+#define VERSION_TEXT_SIZE 	(64U)
+
+#define ANIMATION_DURATION_MS (3000U)
+#define ANIMATION_START_X     (40)
+#define ANIMATION_END_X       (660)
+#define ANIMATION_BOX_SIZE    (100)
+
+static void animation_x_cb(void *obj, int32_t value)
+{
+    lv_obj_set_x((lv_obj_t *)obj, value);
+}
 
 int main(void)
 {
@@ -35,6 +45,7 @@ int main(void)
     lv_obj_t *screen = NULL;
 	lv_obj_t *version_label = NULL;
     lv_obj_t *label = NULL;
+	lv_obj_t *box = NULL;
 
     if (true != device_is_ready(display_dev)) {
         return -ENODEV;
@@ -62,13 +73,19 @@ int main(void)
     	return -ENODEV;
 	}
 
-    lv_obj_set_style_bg_color(screen, lv_color_hex(DARK_SAMUS_ARMOR), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
+    //lv_obj_set_style_bg_color(screen, lv_color_hex(DARK_SAMUS_ARMOR), LV_PART_MAIN);
+    //lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
+
+	lv_obj_set_style_bg_color(screen, lv_color_hex(DARK_SAMUS_BLUE), LV_PART_MAIN);
+	lv_obj_set_style_bg_grad_color(screen, lv_color_hex(DARK_SAMUS_ARMOR),LV_PART_MAIN);
+	lv_obj_set_style_bg_grad_dir(screen, LV_GRAD_DIR_VER, LV_PART_MAIN);
+	lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
 
 	char version_text[VERSION_TEXT_SIZE] = {0};
 	(void)snprintf(version_text, sizeof(version_text),
- 				   "Zephyr %u.%u x LVGL %u.%u", 
+ 				   "Zephyr %u.%u.%u x LVGL %u.%u", 
 				   (unsigned int)KERNEL_VERSION_MAJOR, (unsigned int)KERNEL_VERSION_MINOR,
+				   (unsigned int)KERNEL_PATCHLEVEL,
 				   (unsigned int)lv_version_major(), (unsigned int)lv_version_minor());
 
     version_label = lv_label_create(screen);
@@ -76,12 +93,30 @@ int main(void)
 	lv_obj_set_style_text_font(version_label, &lv_font_montserrat_48, LV_PART_MAIN);
 	lv_obj_set_style_text_color(version_label, lv_color_hex(SAMUS_ORANGE), LV_PART_MAIN);
 	lv_obj_center(version_label);
-
+/*
 	label = lv_label_create(screen);
 	lv_label_set_text(label, "@_art_of_electronics_");
 	lv_obj_set_style_text_font(label, &lv_font_montserrat_28, LV_PART_MAIN);
-	lv_obj_set_style_text_color(label, lv_color_hex(SAMUS_PURPLE), LV_PART_MAIN);
-	lv_obj_align_to(label, version_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 12);
+	lv_obj_set_style_text_color(label, lv_color_hex(SAMUS_RED), LV_PART_MAIN);
+	lv_obj_align_to(label, version_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 150);
+*/
+	box = lv_obj_create(screen);
+	lv_obj_set_size(box, ANIMATION_BOX_SIZE, ANIMATION_BOX_SIZE);
+	lv_obj_set_style_bg_color(box, lv_color_hex(SAMUS_ORANGE), LV_PART_MAIN);
+	lv_obj_set_style_bg_opa(box, LV_OPA_COVER, LV_PART_MAIN);
+	lv_obj_set_style_radius(box, (ANIMATION_BOX_SIZE / 2U), LV_PART_MAIN);
+	lv_obj_set_style_border_width(box, 0, LV_PART_MAIN);
+	lv_obj_set_pos(box, ANIMATION_START_X, 280);
+
+	lv_anim_t anim;
+	lv_anim_init(&anim);
+	lv_anim_set_var(&anim, box);
+	lv_anim_set_exec_cb(&anim, animation_x_cb);
+	lv_anim_set_values(&anim, ANIMATION_START_X, ANIMATION_END_X);
+	lv_anim_set_duration(&anim, ANIMATION_DURATION_MS);
+	lv_anim_set_playback_duration(&anim, ANIMATION_DURATION_MS);
+	lv_anim_set_repeat_count(&anim, LV_ANIM_REPEAT_INFINITE);
+	lv_anim_start(&anim);
 
     while (true) {
     	lv_timer_handler();
