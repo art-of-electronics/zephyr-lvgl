@@ -61,7 +61,7 @@ LOG_MODULE_REGISTER(esp32_lcd_cam_rgb, CONFIG_DISPLAY_LOG_LEVEL);
 
 #define LCD_FRAMEBUFFER_PIXELS      (LCD_HACTIVE * LCD_VACTIVE)
 #define LCD_FRAMEBUFFER_SIZE        (LCD_FRAMEBUFFER_PIXELS * sizeof(uint16_t))
-#define LCD_FRAMEBUFFER_COUNT       (2U)
+#define LCD_FRAMEBUFFER_COUNT       (CONFIG_ESP32_LCD_RGB_FRAMEBUFFER_COUNT)//(2U)
 
 #define LCD_BOUNCE_LINES            (10U)
 #define LCD_BOUNCE_COUNT            (2U)
@@ -73,16 +73,6 @@ LOG_MODULE_REGISTER(esp32_lcd_cam_rgb, CONFIG_DISPLAY_LOG_LEVEL);
 
 #define LCD_GDMA_PSRAM_BURST_SIZE   (32U)
 #define LCD_GDMA_CACHE_ALIGNMENT    (32U)
-
-BUILD_ASSERT(LCD_FIFO_SKIP_BYTES < LCD_DMA_DESC_SIZE, "FIFO skip must fit one DMA descriptor");
-BUILD_ASSERT(0U < LCD_DMA_DESC_COUNT, "DMA descriptor count must be nonzero");
-BUILD_ASSERT(0U == (LCD_BOUNCE_SIZE % LCD_DMA_DESC_SIZE), "Bounce size must match DMA blocks");
-BUILD_ASSERT(0U == (LCD_VACTIVE % LCD_BOUNCE_LINES), "Display height must match bounce lines");
-BUILD_ASSERT(0U == (LCD_BOUNCE_SIZE % LCD_GDMA_CACHE_ALIGNMENT), "Bounce buffer must be cache aligned");
-BUILD_ASSERT(LCD_DMA_DESC_SIZE <= 4095U, "GDMA descriptor payload exceeds 12-bit size field");
-BUILD_ASSERT(0U == (LCD_DMA_DESC_SIZE % LCD_GDMA_PSRAM_BURST_SIZE), "DMA descriptor size must be aligned to PSRAM block size");
-BUILD_ASSERT(0U == (LCD_FRAMEBUFFER_SIZE % LCD_GDMA_CACHE_ALIGNMENT), "Framebuffer size must be cache aligned");
-BUILD_ASSERT(0U < LCD_PERIPH_CLOCK_PRE_SCALE, "LCD peripheral clock prescaler must be nonzero");
 
 #if !DT_NODE_HAS_STATUS(LCD_CAM_NODE, okay)
 #error "LCD_CAM must be enabled in the board devicetree"
@@ -100,8 +90,17 @@ BUILD_ASSERT(0U < LCD_PERIPH_CLOCK_PRE_SCALE, "LCD peripheral clock prescaler mu
 #define LCD_PRESENT_PREFETCH_EOF    (LCD_EXPECTED_EOF_PER_FRAME - LCD_BOUNCE_COUNT)
 #define LCD_WRITE_WAIT_TIMEOUT_MS   (1000U)
 
-BUILD_ASSERT(LCD_EXPECTED_EOF_PER_FRAME > LCD_BOUNCE_COUNT,
-             "At least two bounce transfers are required per frame");
+BUILD_ASSERT(LCD_FIFO_SKIP_BYTES < LCD_DMA_DESC_SIZE, "FIFO skip must fit one DMA descriptor");
+BUILD_ASSERT(0U < LCD_DMA_DESC_COUNT, "DMA descriptor count must be nonzero");
+BUILD_ASSERT(0U == (LCD_BOUNCE_SIZE % LCD_DMA_DESC_SIZE), "Bounce size must match DMA blocks");
+BUILD_ASSERT(0U == (LCD_VACTIVE % LCD_BOUNCE_LINES), "Display height must match bounce lines");
+BUILD_ASSERT(0U == (LCD_BOUNCE_SIZE % LCD_GDMA_CACHE_ALIGNMENT), "Bounce buffer must be cache aligned");
+BUILD_ASSERT(LCD_DMA_DESC_SIZE <= 4095U, "GDMA descriptor payload exceeds 12-bit size field");
+BUILD_ASSERT(0U == (LCD_DMA_DESC_SIZE % LCD_GDMA_PSRAM_BURST_SIZE), "DMA descriptor size must be aligned to PSRAM block size");
+BUILD_ASSERT(0U == (LCD_FRAMEBUFFER_SIZE % LCD_GDMA_CACHE_ALIGNMENT), "Framebuffer size must be cache aligned");
+BUILD_ASSERT(0U < LCD_PERIPH_CLOCK_PRE_SCALE, "LCD peripheral clock prescaler must be nonzero");
+BUILD_ASSERT(LCD_EXPECTED_EOF_PER_FRAME > LCD_BOUNCE_COUNT, "At least two bounce transfers are required per frame");
+BUILD_ASSERT(CONFIG_ESP_SPIRAM_HEAP_SIZE >= (LCD_FRAMEBUFFER_COUNT * LCD_FRAMEBUFFER_SIZE), "Insufficient PSRAM heap for LCD framebuffers");
 
 /*****************************************************************************
                      PRIVATE STRUCTS / ENUMS / VARIABLES
@@ -251,7 +250,7 @@ static int lcd_clock_init(struct esp32_lcd_cam_rgb_data *data, const struct esp3
 
 	ret = esp_clk_tree_src_get_freq_hz(clock_source, ESP_CLK_TREE_SRC_FREQ_PRECISION_APPROX, &source_clock_hz);
 	if (ESP_OK != ret) {
-    LOG_ERR("Failed to get LCD clock source frequency (%d)", ret);
+    	LOG_ERR("Failed to get LCD clock source frequency (%d)", ret);
 		return -EINVAL;
 	}
 
@@ -306,9 +305,7 @@ static void lcd_timing_init(struct esp32_lcd_cam_rgb_data *data, const struct es
 
 	lcd_ll_enable_output_hsync_in_porch_region(dev, true);
 	lcd_ll_set_hsync_position(dev, 0);
-
 	lcd_ll_enable_auto_next_frame(dev, true);
-
 	lcd_ll_set_delay_ticks(dev, 0, 0, 0);
 	lcd_ll_set_data_delay_ticks(dev, 0);
 }
@@ -327,7 +324,6 @@ static int lcd_cam_init(struct esp32_lcd_cam_rgb_data *data, const struct esp32_
 	lcd_ll_reset_register(LCD_BUS_ID);
 
 	data->hal.dev = LCD_LL_GET_HW(LCD_BUS_ID);
-
 	lcd_ll_enable_output_always_on(data->hal.dev, false);
 
 	ret = lcd_clock_init(data, config);
@@ -337,7 +333,6 @@ static int lcd_cam_init(struct esp32_lcd_cam_rgb_data *data, const struct esp32_
 
 	lcd_ll_reset(data->hal.dev);
 	lcd_ll_fifo_reset(data->hal.dev);
-
 	lcd_timing_init(data, config);
 
 	return 0;
@@ -406,9 +401,8 @@ static void lcd_framebuffer_deinit(struct esp32_lcd_cam_rgb_data *data)
 
 /**
  * @brief Allocate two equally sized and aligned RGB565X PSRAM framebuffers.
- * @return 0 on success, or a negative errno value.
- * 
  * @param[in,out] data Pointer to the LCD driver runtime state.
+ * @return 0 on success, or a negative errno value.
  */
 static int lcd_framebuffer_init(struct esp32_lcd_cam_rgb_data *data)
 {
@@ -430,13 +424,27 @@ static int lcd_framebuffer_init(struct esp32_lcd_cam_rgb_data *data)
         memset(data->framebuffer[index], 0, LCD_FRAMEBUFFER_SIZE);
         sys_cache_data_flush_range(data->framebuffer[index], LCD_FRAMEBUFFER_SIZE);
 	}
-
+/*
     data->front_idx = 0U;
     data->back_idx = 1U;
 
-    LOG_INF("Front framebuffer: %u bytes at %p", (unsigned int)LCD_FRAMEBUFFER_SIZE, (void *)data->framebuffer[data->front_idx]);
-    LOG_INF("Back framebuffer: %u bytes at %p", (unsigned int)LCD_FRAMEBUFFER_SIZE, (void *)data->framebuffer[data->back_idx]);
+    LOG_INF("Front framebuffer: %u bytes at %p", (unsigned int)LCD_FRAMEBUFFER_SIZE, 
+			(void *)data->framebuffer[data->front_idx]);
+    LOG_INF("Back framebuffer: %u bytes at %p", (unsigned int)LCD_FRAMEBUFFER_SIZE, 
+			(void *)data->framebuffer[data->back_idx]);
     return 0;
+*/
+	data->front_idx = 0U;
+	data->back_idx = (1U < LCD_FRAMEBUFFER_COUNT) ? (1U) : (0U);
+
+	LOG_INF("Framebuffer count: %u", LCD_FRAMEBUFFER_COUNT);
+
+	for (size_t index = 0U; index < LCD_FRAMEBUFFER_COUNT; ++index) {
+		LOG_INF("Framebuffer %u: %u bytes at %p", (unsigned int)index, 
+			    (unsigned int)LCD_FRAMEBUFFER_SIZE, (void *)data->framebuffer[index]);
+	}
+
+	return 0;	
 }
 
 /**
@@ -444,9 +452,8 @@ static int lcd_framebuffer_init(struct esp32_lcd_cam_rgb_data *data)
  *
  * @note Must be called with buffer_lock held from thread context.
  */
-static void lcd_dirty_region_add(struct esp32_lcd_cam_rgb_data *data,
-                                 uint16_t x, uint16_t y,
-                                 uint16_t width, uint16_t height)
+static void lcd_dirty_region_add(struct esp32_lcd_cam_rgb_data *data, uint16_t x, uint16_t y, 
+								 uint16_t width, uint16_t height)
 {
     const uint16_t x2 = (uint16_t)((uint32_t)x + (uint32_t)width);
     const uint16_t y2 = (uint16_t)((uint32_t)y + (uint32_t)height);
@@ -515,8 +522,7 @@ static int lcd_drawing_buffer_lock(struct esp32_lcd_cam_rgb_data *data)
         }
 
         if (true == atomic_cas(&data->buffer_lock, 0, 1)) {
-            if ((0 == atomic_get(&data->sync_pending)) &&
-                (false == data->frame_ready)) {
+            if ((0 == atomic_get(&data->sync_pending)) && (false == data->frame_ready)) {
                 return 0;
             }
 
@@ -542,6 +548,9 @@ static void lcd_present_ready_frame(struct esp32_lcd_cam_rgb_data *data)
 {
     uint8_t old_front = 0U;
 
+	if (1U == LCD_FRAMEBUFFER_COUNT) {
+		return;
+	}
     if (0 != atomic_get(&data->sync_pending)) {
         atomic_inc(&data->swap_deferred_count);
         return;
@@ -550,8 +559,7 @@ static void lcd_present_ready_frame(struct esp32_lcd_cam_rgb_data *data)
         atomic_inc(&data->swap_deferred_count);
         return;
     }
-    if ((false == data->frame_ready) || (false == data->dirty.valid) ||
-        (0 != atomic_get(&data->sync_pending))) {
+    if ((false == data->frame_ready) || (false == data->dirty.valid) || (0 != atomic_get(&data->sync_pending))) {
         atomic_set(&data->buffer_lock, 0);
         return;
     }
@@ -582,8 +590,7 @@ static void lcd_queue_sync_work(struct esp32_lcd_cam_rgb_data *data)
 {
     int ret = 0;
 
-    if ((0 == atomic_get(&data->sync_retry_needed)) ||
-        (0 == atomic_get(&data->sync_pending))) {
+    if ((0 == atomic_get(&data->sync_retry_needed)) || (0 == atomic_get(&data->sync_pending))) {
         return;
     }
 
@@ -655,8 +662,7 @@ static void lcd_dma_callback(const struct device *dev, void *user_data, uint32_t
     lcd_bounce_fill(data, index);
 
     /* The next two EOF refills populate the first lines of the next frame. */
-    if ((LCD_PRESENT_PREFETCH_EOF == data->bb_eof_count) &&
-        (0U == data->next_line)) {
+    if ((LCD_PRESENT_PREFETCH_EOF == data->bb_eof_count) && (0U == data->next_line)) {
         lcd_present_ready_frame(data);
     }
 }
@@ -673,12 +679,14 @@ static void lcd_dma_callback(const struct device *dev, void *user_data, uint32_t
 static void lcd_restart_desc_init(struct esp32_lcd_cam_rgb_data *data)
 {
 	memset(&data->restart_desc, 0, sizeof(data->restart_desc));
+
 	data->restart_desc.buffer = &data->bounce[0][LCD_FIFO_SKIP_BYTES];
 	data->restart_desc.dw0.size = LCD_DMA_DESC_SIZE - LCD_FIFO_SKIP_BYTES;
 	data->restart_desc.dw0.length = LCD_DMA_DESC_SIZE - LCD_FIFO_SKIP_BYTES;
 	data->restart_desc.dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
 	data->restart_desc.dw0.suc_eof = 0;
 	data->restart_desc.next = &data->dma_desc[1];
+
 	sys_cache_data_flush_range(&data->restart_desc, sizeof(data->restart_desc));
 }
 
@@ -783,7 +791,6 @@ static void lcd_vsync_isr(void *arg)
 
 	frame_eof_count = data->bb_eof_count;
 	data->bb_eof_count = 0U;
-
 	if (frame_eof_count >= LCD_EXPECTED_EOF_PER_FRAME) {
 		lcd_queue_sync_work(data);
 		return;
@@ -817,10 +824,8 @@ static void lcd_vsync_isr(void *arg)
  */
 static int lcd_vsync_irq_init(struct esp32_lcd_cam_rgb_data *data)
 {
-	int ret = esp_intr_alloc(ETS_LCD_CAM_INTR_SOURCE,
-		ESP_INTR_FLAG_INTRDISABLED, lcd_vsync_isr, data,
-		&data->lcd_intr_handle);
-
+	int ret = esp_intr_alloc(ETS_LCD_CAM_INTR_SOURCE, ESP_INTR_FLAG_INTRDISABLED, lcd_vsync_isr, data,
+							 &data->lcd_intr_handle);
 	if (ESP_OK != ret) {
 		LOG_ERR("LCD_CAM IRQ allocation failed (%d)", ret);
 		return -EIO;
@@ -854,7 +859,7 @@ static int esp32_lcd_cam_rgb_init(const struct device *dev)
 	struct esp32_lcd_cam_rgb_data *data = dev->data;
 	const struct esp32_lcd_cam_rgb_config *config = dev->config;
 	int ret = -1;
-
+/*
 	data->pixel_format = PIXEL_FORMAT_RGB_565X;
 	data->orientation = DISPLAY_ORIENTATION_NORMAL;
 	data->front_idx = 0U;
@@ -867,6 +872,21 @@ static int esp32_lcd_cam_rgb_init(const struct device *dev)
 	k_work_init(&data->sync_work, lcd_framebuffer_sync_work_handler);
 
 	LOG_INF("Initializing ESP32-S3 LCD_CAM RGB display driver (double framebuffer)");
+*/
+	data->pixel_format = PIXEL_FORMAT_RGB_565X;
+	data->orientation = DISPLAY_ORIENTATION_NORMAL;
+	data->front_idx = 0U;
+	data->back_idx = (1U < LCD_FRAMEBUFFER_COUNT) ? 1U : 0U;
+	data->frame_ready = false;
+	data->dirty.valid = false;
+
+	atomic_set(&data->buffer_lock, 0);
+	atomic_set(&data->sync_pending, 0);
+	atomic_set(&data->sync_retry_needed, 0);
+
+	k_work_init(&data->sync_work, lcd_framebuffer_sync_work_handler);
+
+	LOG_INF("Initializing ESP32-S3 LCD_CAM RGB display driver (%u framebuffer(s))", LCD_FRAMEBUFFER_COUNT);
 
 	ret = lcd_pinctrl_init();
 	if (ret < 0) {
@@ -934,16 +954,18 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
     uint32_t write_max_us = 0U;
     uint32_t write_avg_bytes = 0U;
     int ret = 0;
-
-    if ((NULL == desc) || (NULL == buf) ||
-        (NULL == data->framebuffer[0]) || (NULL == data->framebuffer[1])) {
+/*
+    if ((NULL == desc) || (NULL == buf) || (NULL == data->framebuffer[0]) || (NULL == data->framebuffer[1])) {
         return -EINVAL;
     }
+*/
+	if ((NULL == desc) || (NULL == buf) || (NULL == data->framebuffer[data->back_idx])) {
+		return -EINVAL;
+	}
     if ((0U == desc->width) || (0U == desc->height) || (desc->pitch < desc->width)) {
         return -EINVAL;
     }
-    if (((uint32_t)x + desc->width > config->width) ||
-        ((uint32_t)y + desc->height > config->height)) {
+    if (((uint32_t)x + desc->width > config->width) || ((uint32_t)y + desc->height > config->height)) {
         return -EINVAL;
     }
 
@@ -958,8 +980,7 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
     ret = lcd_drawing_buffer_lock(data);
     if (0 != ret) {
         LOG_ERR("Back framebuffer unavailable: %d (VSYNC=%d, swaps=%d, sync=%d)",
-                ret,
-                (int)atomic_get(&data->vsync_count),
+                ret, (int)atomic_get(&data->vsync_count),
                 (int)atomic_get(&data->frame_swap_count),
                 (int)atomic_get(&data->sync_pending));
         return ret;
@@ -978,11 +999,18 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
 
     elapsed_cycles = k_cycle_get_32() - start_cycles;
     elapsed_us = k_cyc_to_us_floor32(elapsed_cycles);
-
+/*
     lcd_dirty_region_add(data, x, y, desc->width, desc->height);
     if (false == desc->frame_incomplete) {
         data->frame_ready = true;
     }
+*/
+	if (1U < LCD_FRAMEBUFFER_COUNT) {
+		lcd_dirty_region_add(data, x, y, desc->width, desc->height);
+		if (false == desc->frame_incomplete) {
+			data->frame_ready = true;
+		}
+	}
 
     data->write_count++;
     data->write_total_us += (uint64_t)elapsed_us;
@@ -1017,8 +1045,7 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
 
         data->last_stats_ms = now_ms;
         LOG_INF("LCD: fill_max=%u us, EOF=%d, VSYNC=%d, restarts=%d, errors=%d, swaps=%d, defer=%d, sync_err=%d",
-                max_us,
-                (int)atomic_get(&data->dma_eof_count),
+                max_us, (int)atomic_get(&data->dma_eof_count),
                 (int)atomic_get(&data->vsync_count),
                 (int)atomic_get(&data->vsync_restart_count),
                 (int)atomic_get(&data->dma_error_count),
@@ -1104,5 +1131,4 @@ static DEVICE_API(display, esp32_lcd_cam_rgb_api) = {
 };
 
 DEVICE_DT_INST_DEFINE(0, esp32_lcd_cam_rgb_init, NULL, &lcd_data, &lcd_config, 
-					  POST_KERNEL, CONFIG_DISPLAY_INIT_PRIORITY, 
-					  &esp32_lcd_cam_rgb_api);
+					  POST_KERNEL, CONFIG_DISPLAY_INIT_PRIORITY, &esp32_lcd_cam_rgb_api);

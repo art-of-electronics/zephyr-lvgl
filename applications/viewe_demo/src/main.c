@@ -83,9 +83,9 @@ int main(void)
 
 	char version_text[VERSION_TEXT_SIZE] = {0};
 	(void)snprintf(version_text, sizeof(version_text),
- 				   "Zephyr %u.%u.%u x LVGL %u.%u", 
+ 				   "Zephyr %u.%u x LVGL %u.%u", 
 				   (unsigned int)KERNEL_VERSION_MAJOR, (unsigned int)KERNEL_VERSION_MINOR,
-				   (unsigned int)KERNEL_PATCHLEVEL,
+				   //(unsigned int)KERNEL_PATCHLEVEL,
 				   (unsigned int)lv_version_major(), (unsigned int)lv_version_minor());
 
     version_label = lv_label_create(screen);
