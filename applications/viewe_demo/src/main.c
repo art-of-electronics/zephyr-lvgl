@@ -33,6 +33,9 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 #define ANIMATION_END_X       (660)
 #define ANIMATION_BOX_SIZE    (100)
 
+#define RUN_STRESS_TEST (0)
+extern void stress_test_start(lv_obj_t *screen);
+
 static void animation_x_cb(void *obj, int32_t value)
 {
     lv_obj_set_x((lv_obj_t *)obj, value);
@@ -117,6 +120,10 @@ int main(void)
 	lv_anim_set_playback_duration(&anim, ANIMATION_DURATION_MS);
 	lv_anim_set_repeat_count(&anim, LV_ANIM_REPEAT_INFINITE);
 	lv_anim_start(&anim);
+
+#if RUN_STRESS_TEST
+	stress_test_start(screen);
+#endif
 
     while (true) {
     	lv_timer_handler();

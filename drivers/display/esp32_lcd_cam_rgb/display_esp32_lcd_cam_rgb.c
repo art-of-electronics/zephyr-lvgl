@@ -41,6 +41,14 @@ PINCTRL_DT_DEFINE(LCD_CAM_NODE);
 
 LOG_MODULE_REGISTER(esp32_lcd_cam_rgb, CONFIG_DISPLAY_LOG_LEVEL);
 
+#define LOG_PRINT (IS_ENABLED(CONFIG_LOG_LCD_CAM_DIAGNOSTICS))
+
+#if (1 == LOG_PRINT)
+#define LCD_LOG_INF(...) LOG_INF(__VA_ARGS__)
+#else
+#define LCD_LOG_INF(...) do { } while (false)
+#endif
+
 #define LCD_BUS_ID                  (0U)
 
 #define LCD_PERIPH_CLOCK_PRE_SCALE	(2U)
@@ -61,7 +69,9 @@ LOG_MODULE_REGISTER(esp32_lcd_cam_rgb, CONFIG_DISPLAY_LOG_LEVEL);
 
 #define LCD_FRAMEBUFFER_PIXELS      (LCD_HACTIVE * LCD_VACTIVE)
 #define LCD_FRAMEBUFFER_SIZE        (LCD_FRAMEBUFFER_PIXELS * sizeof(uint16_t))
-#define LCD_FRAMEBUFFER_COUNT       (CONFIG_ESP32_LCD_RGB_FRAMEBUFFER_COUNT)//(2U)
+#define LCD_FRAMEBUFFER_COUNT       (CONFIG_ESP32_LCD_RGB_FRAMEBUFFER_COUNT)
+#define LCD_INVALID_FRAMEBUFFER_IDX (UINT8_MAX)
+#define LCD_MAX_DIRTY_REGIONS       (16U) //Maximum number of independent dirty rectangles.
 
 #define LCD_BOUNCE_LINES            (10U)
 #define LCD_BOUNCE_COUNT            (2U)
@@ -87,6 +97,7 @@ LOG_MODULE_REGISTER(esp32_lcd_cam_rgb, CONFIG_DISPLAY_LOG_LEVEL);
 #define LCD_STATS_INTERVAL_MS       (1000U)
 #define LCD_EXPECTED_EOF_PER_FRAME  (LCD_VACTIVE / LCD_BOUNCE_LINES)
 #define LCD_WRITE_STATS_SAMPLES     (100U)
+#define LCD_SYNC_STATS_SAMPLES      (100U)
 #define LCD_PRESENT_PREFETCH_EOF    (LCD_EXPECTED_EOF_PER_FRAME - LCD_BOUNCE_COUNT)
 #define LCD_WRITE_WAIT_TIMEOUT_MS   (1000U)
 
@@ -101,6 +112,7 @@ BUILD_ASSERT(0U == (LCD_FRAMEBUFFER_SIZE % LCD_GDMA_CACHE_ALIGNMENT), "Framebuff
 BUILD_ASSERT(0U < LCD_PERIPH_CLOCK_PRE_SCALE, "LCD peripheral clock prescaler must be nonzero");
 BUILD_ASSERT(LCD_EXPECTED_EOF_PER_FRAME > LCD_BOUNCE_COUNT, "At least two bounce transfers are required per frame");
 BUILD_ASSERT(CONFIG_ESP_SPIRAM_HEAP_SIZE >= (LCD_FRAMEBUFFER_COUNT * LCD_FRAMEBUFFER_SIZE), "Insufficient PSRAM heap for LCD framebuffers");
+BUILD_ASSERT((1U <= LCD_FRAMEBUFFER_COUNT) && (3U >= LCD_FRAMEBUFFER_COUNT), "Framebuffer count must be between 1 and 3");
 
 /*****************************************************************************
                      PRIVATE STRUCTS / ENUMS / VARIABLES
@@ -118,10 +130,9 @@ struct esp32_lcd_cam_rgb_config {
 };
 
 /**
- * @brief Bounding rectangle of framebuffer modifications.
+ * @brief A rectangular framebuffer modification (exclusive end coordinates).
  *
- * @note End coordinates are exclusive. The rectangle is owned by the
- *       display-write thread until a completed frame is presented.
+ * @note End coordinates are exclusive. Regions are recorded per LVGL flush.
  */
 struct lcd_dirty_region {
     uint16_t x1;
@@ -132,62 +143,96 @@ struct lcd_dirty_region {
 };
 
 /**
+ * @brief Collection of framebuffer regions requiring synchronization.
+ *
+ * @note When the list overflows, full_refresh requests synchronization
+ * 	     of the entire framebuffer instead of losing dirty rectangles.
+ */
+#if (1U < LCD_FRAMEBUFFER_COUNT)
+struct lcd_dirty_region_list {
+	struct lcd_dirty_region regions[LCD_MAX_DIRTY_REGIONS];
+	uint8_t count;
+	bool full_refresh;
+};
+#endif
+
+/**
  * @brief Runtime state of the ESP32-S3 LCD_CAM RGB driver.
  *
  * @note The front buffer is scanned through two SRAM bounce buffers and a
- *       continuous GDMA descriptor ring. The back buffer receives LVGL writes.
+ *       continuous GDMA descriptor ring. In multi-buffer modes, LVGL writes
+ *       target a separate drawing buffer.
  */
 struct esp32_lcd_cam_rgb_data {
+	/* Zephyr display state and LCD_CAM hardware. */
 	enum display_pixel_format pixel_format;
 	enum display_orientation orientation;
-
 	lcd_hal_context_t hal;
+	intr_handle_t lcd_intr_handle;
 
+	/* GDMA channel, descriptor ring and SRAM bounce buffers. */
 	const struct device *dma_dev;
 	uint32_t dma_channel;
+	struct dma_block_config dma_setup_block;
+	struct dma_config dma_config;
+	dma_descriptor_t restart_desc __aligned(4);
+	dma_descriptor_t dma_desc[LCD_DMA_DESC_COUNT] __aligned(4);
+	uint8_t bounce[LCD_BOUNCE_COUNT][LCD_BOUNCE_SIZE] __aligned(32);
+	size_t next_line;
+	size_t bb_eof_count;
 
+	/* Front framebuffer is scanned out; back framebuffer receives writes. */
 	uint16_t *framebuffer[LCD_FRAMEBUFFER_COUNT];
 	uint8_t front_idx;
 	uint8_t back_idx;
-
-	/* VSYNC DMA prefetch switches the front buffer; display_write() uses back. */
 	atomic_t buffer_lock;
-	atomic_t sync_pending;
-	atomic_t sync_retry_needed;
 	bool frame_ready;
-	struct k_work sync_work;
-	struct lcd_dirty_region dirty;
-	struct lcd_dirty_region sync_region;
+	atomic_t sync_pending;
 
+#if (1U < LCD_FRAMEBUFFER_COUNT)
+	/* A new frame remains immutable while it is presented/synchronized. */
+	struct lcd_dirty_region_list dirty;
+	struct lcd_dirty_region_list sync_region;
+#endif
+
+#if (2U == LCD_FRAMEBUFFER_COUNT)
+	/* 2 FB: copy the presented dirty regions to the drawing buffer. */
+	atomic_t sync_retry_needed;
+	struct k_work sync_work;
+#endif
+
+#if (3U == LCD_FRAMEBUFFER_COUNT)
+	/* 3 FB: mailbox presentation and synchronization of recycled DRAW. */
+	uint8_t ready_idx;
+	uint8_t sync_source_idx;
+	uint8_t sync_target_idx;
+	struct lcd_dirty_region_list stale[LCD_FRAMEBUFFER_COUNT];
+#endif
+
+#if (1 == LOG_PRINT)
+	/* Optional performance and diagnostics instrumentation. */
+	atomic_t fill_max_cycles;
+	atomic_t dma_eof_count;
+	atomic_t dma_error_count;
+	atomic_t vsync_count;
+	atomic_t vsync_restart_count;
 	atomic_t frame_swap_count;
 	atomic_t swap_deferred_count;
 	atomic_t sync_submit_error_count;
-
-	uint8_t bounce[LCD_BOUNCE_COUNT][LCD_BOUNCE_SIZE] __aligned(32);
-	size_t next_line; 		// Next framebuffer line to copy into a bounce buffer.
-	intr_handle_t lcd_intr_handle;
-
-	dma_descriptor_t restart_desc __aligned(4);
-	dma_descriptor_t dma_desc[LCD_DMA_DESC_COUNT] __aligned(4);
-
-	struct dma_block_config dma_setup_block;
-	struct dma_config dma_config;
-
-	atomic_t fill_max_cycles;
-	atomic_t dma_eof_count;
-	atomic_t dma_unexpected_eof_count;
-	atomic_t dma_error_count;
-	atomic_t vsync_count;
-
+	atomic_t frame_drop_count;
 	uint32_t last_stats_ms;
-	atomic_t debug_eof_addr;
-	size_t bb_eof_count;
-
 	uint32_t write_count;
 	uint32_t write_max_us;
 	uint64_t write_total_us;
 	uint64_t write_total_bytes;
-	atomic_t vsync_restart_count;
+#if (1U < LCD_FRAMEBUFFER_COUNT)
+	uint32_t sync_stats_samples;
+	uint64_t sync_stats_total_us;
+	uint64_t sync_stats_total_bytes;
+	uint32_t sync_stats_max_us;
+	uint32_t sync_stats_full_count;
+#endif
+#endif
 };
 
 static struct esp32_lcd_cam_rgb_data lcd_data __aligned(32);
@@ -209,8 +254,9 @@ static const struct esp32_lcd_cam_rgb_config lcd_config = {
                          PRIVATE FUNCTION DECLARATIONS
 *****************************************************************************/
 static void lcd_dma_callback(const struct device *dev, void *user_data, uint32_t channel, int status);
+#if (2U == LCD_FRAMEBUFFER_COUNT)
 static void lcd_framebuffer_sync_work_handler(struct k_work *work);
-
+#endif
 
 /*****************************************************************************
                        PRIVATE FUNCTION IMPLEMENTATIONS
@@ -229,7 +275,7 @@ static int lcd_pinctrl_init(void)
 		return ret;
 	}
 
-	LOG_INF("LCD_CAM RGB pinctrl applied");
+	LCD_LOG_INF("LCD_CAM RGB pinctrl applied");
 	return 0;
 }
 
@@ -244,7 +290,9 @@ static int lcd_clock_init(struct esp32_lcd_cam_rgb_data *data, const struct esp3
 	const soc_periph_lcd_clk_src_t clock_source = LCD_CLK_SRC_DEFAULT;
 	uint32_t source_clock_hz = 0U;
 	uint32_t lcd_clock_hz = 0U;
+#if (1 == LOG_PRINT)
 	uint32_t pixel_clock_hz = 0U;
+#endif
 	uint32_t pclk_prescale = 0U;
 	int ret = -1;
 
@@ -272,11 +320,13 @@ static int lcd_clock_init(struct esp32_lcd_cam_rgb_data *data, const struct esp3
 	lcd_ll_set_group_clock_coeff(data->hal.dev, LCD_PERIPH_CLOCK_PRE_SCALE, 0, 0);
 	lcd_ll_set_pixel_clock_prescale(data->hal.dev, pclk_prescale);
 	
+#if (1 == LOG_PRINT)
 	pixel_clock_hz = lcd_clock_hz / pclk_prescale;
+#endif
 
-	LOG_INF("LCD clock source: %u Hz", source_clock_hz);
-	LOG_INF("LCD peripheral clock: %u Hz", lcd_clock_hz);
-	LOG_INF("RGB pixel clock: %u Hz", pixel_clock_hz);
+	LCD_LOG_INF("LCD clock source: %u Hz", source_clock_hz);
+	LCD_LOG_INF("LCD peripheral clock: %u Hz", lcd_clock_hz);
+	LCD_LOG_INF("RGB pixel clock: %u Hz", pixel_clock_hz);
 	return 0;
 }
 
@@ -381,7 +431,7 @@ static int lcd_dma_channel_init(struct esp32_lcd_cam_rgb_data *data)
 		return ret;
 	}
 
-	LOG_INF("LCD GDMA configured: Zephyr channel %u, HW TX channel %u", data->dma_channel, LCD_GDMA_HW_CHANNEL);
+	LCD_LOG_INF("LCD GDMA configured: Zephyr channel %u, HW TX channel %u", data->dma_channel, LCD_GDMA_HW_CHANNEL);
 	return 0;
 }
 
@@ -424,84 +474,352 @@ static int lcd_framebuffer_init(struct esp32_lcd_cam_rgb_data *data)
         memset(data->framebuffer[index], 0, LCD_FRAMEBUFFER_SIZE);
         sys_cache_data_flush_range(data->framebuffer[index], LCD_FRAMEBUFFER_SIZE);
 	}
-/*
-    data->front_idx = 0U;
-    data->back_idx = 1U;
 
-    LOG_INF("Front framebuffer: %u bytes at %p", (unsigned int)LCD_FRAMEBUFFER_SIZE, 
-			(void *)data->framebuffer[data->front_idx]);
-    LOG_INF("Back framebuffer: %u bytes at %p", (unsigned int)LCD_FRAMEBUFFER_SIZE, 
-			(void *)data->framebuffer[data->back_idx]);
-    return 0;
-*/
 	data->front_idx = 0U;
 	data->back_idx = (1U < LCD_FRAMEBUFFER_COUNT) ? (1U) : (0U);
 
-	LOG_INF("Framebuffer count: %u", LCD_FRAMEBUFFER_COUNT);
+	LCD_LOG_INF("Framebuffer count: %u", LCD_FRAMEBUFFER_COUNT);
 
 	for (size_t index = 0U; index < LCD_FRAMEBUFFER_COUNT; ++index) {
-		LOG_INF("Framebuffer %u: %u bytes at %p", (unsigned int)index, 
+		LCD_LOG_INF("Framebuffer %u: %u bytes at %p", (unsigned int)index,
 			    (unsigned int)LCD_FRAMEBUFFER_SIZE, (void *)data->framebuffer[index]);
 	}
 
 	return 0;	
 }
 
+#if (1U < LCD_FRAMEBUFFER_COUNT)
 /**
- * @brief Merge a completed write rectangle with the current dirty bounds.
+ * @brief Remove all dirty regions from a list.
  *
- * @note Must be called with buffer_lock held from thread context.
+ * @param[in,out] list Dirty region list.
  */
-static void lcd_dirty_region_add(struct esp32_lcd_cam_rgb_data *data, uint16_t x, uint16_t y, 
-								 uint16_t width, uint16_t height)
+static void lcd_dirty_region_list_reset(struct lcd_dirty_region_list *list)
 {
-    const uint16_t x2 = (uint16_t)((uint32_t)x + (uint32_t)width);
-    const uint16_t y2 = (uint16_t)((uint32_t)y + (uint32_t)height);
-
-    if (false == data->dirty.valid) {
-        data->dirty.x1 = x;
-        data->dirty.y1 = y;
-        data->dirty.x2 = x2;
-        data->dirty.y2 = y2;
-        data->dirty.valid = true;
-        return;
-    }
-
-    data->dirty.x1 = MIN(data->dirty.x1, x);
-    data->dirty.y1 = MIN(data->dirty.y1, y);
-    data->dirty.x2 = MAX(data->dirty.x2, x2);
-    data->dirty.y2 = MAX(data->dirty.y2, y2);
+	list->count = 0U;
+	list->full_refresh = false;
 }
 
 /**
- * @brief Synchronize the presented dirty rectangle to the newly inactive buffer.
+ * @brief Test whether a dirty region list requires any synchronization.
+ *
+ * @param[in] list Dirty region list.
+ * @return true if no dirty pixels are recorded.
+ */
+static bool lcd_dirty_region_list_empty(const struct lcd_dirty_region_list *list)
+{
+	return ((0U == list->count) && (false == list->full_refresh));
+}
+
+/**
+ * @brief Add a dirty rectangle to the list.
+ *
+ * Intersecting or touching rectangles are merged. If the list
+ * reaches its capacity, a full framebuffer refresh is requested.
+ *
+ * @param[in,out] list Dirty region list.
+ * @param[in] region Rectangle to add.
+ *
+ * @note Caller must provide a valid rectangle within the framebuffer.
+ */
+static void lcd_dirty_region_list_add(struct lcd_dirty_region_list *list, const struct lcd_dirty_region *region)
+{
+	struct lcd_dirty_region merged = {0};
+	size_t index = 0U;
+
+	if ((false == region->valid) || (true == list->full_refresh)) {
+		return;
+	}
+	if ((region->x1 >= region->x2) || (region->y1 >= region->y2)) {
+		return;
+	}
+
+	merged = *region;
+
+	/*
+	 * Restart after every merge because the enlarged rectangle
+	 * may intersect regions that were previously disjoint.
+	 */
+	while (index < list->count) {
+		const struct lcd_dirty_region *current = &list->regions[index];
+
+		bool intersects = (merged.x1 <= current->x2) && (current->x1 <= merged.x2) &&
+						  (merged.y1 <= current->y2) && (current->y1 <= merged.y2);
+
+		if (true == intersects) {
+			merged.x1 = MIN(merged.x1, current->x1);
+			merged.y1 = MIN(merged.y1, current->y1);
+			merged.x2 = MAX(merged.x2, current->x2);
+			merged.y2 = MAX(merged.y2, current->y2);
+
+			list->count--;
+			list->regions[index] = list->regions[list->count];
+
+			index = 0U;
+			continue;
+		}
+
+		index++;
+	}
+
+	if (LCD_MAX_DIRTY_REGIONS <= list->count) {
+		list->count = 0U;
+		list->full_refresh = true;
+		return;
+	}
+
+	list->regions[list->count] = merged;
+	list->count++;
+}
+
+#if (3U == LCD_FRAMEBUFFER_COUNT)
+/**
+ * @brief Merge one dirty region list into another.
+ *
+ * @param[in,out] destination Destination list.
+ * @param[in] source Source list.
+ */
+static void lcd_dirty_region_list_merge(struct lcd_dirty_region_list *destination,
+									    const struct lcd_dirty_region_list *source)
+{
+	if (destination == source) {
+		return;
+	}
+
+	if (true == destination->full_refresh) {
+		return;
+	}
+
+	if (true == source->full_refresh) {
+		destination->count = 0U;
+		destination->full_refresh = true;
+		return;
+	}
+
+	for (size_t index = 0U; index < source->count; ++index) {
+		lcd_dirty_region_list_add(destination, &source->regions[index]);
+
+		if (true == destination->full_refresh) {
+			break;
+		}
+	}
+}
+#endif
+
+/**
+ * @brief Copy dirty framebuffer regions from source to destination.
+ *
+ * @param[in] list Dirty region list.
+ * @param[in] source Source framebuffer.
+ * @param[out] destination Destination framebuffer.
+ * @param[in] width Framebuffer width in pixels.
+ * @param[in] height Framebuffer height in pixels.
+ *
+ * @return Number of copied bytes.
+ *
+ * @note Source and destination framebuffers must remain stable
+ *       throughout the entire operation.
+ */
+static size_t lcd_dirty_region_list_copy(const struct lcd_dirty_region_list *list, const uint16_t *source,
+					 					 uint16_t *destination, uint16_t width, uint16_t height)
+{
+	size_t copied_bytes = 0U;
+	size_t region_count = 0U;
+	struct lcd_dirty_region full_region = {0};
+
+	if (true == lcd_dirty_region_list_empty(list)) {
+		return 0U;
+	}
+
+	if (true == list->full_refresh) {
+		full_region.x1 = 0U;
+		full_region.y1 = 0U;
+		full_region.x2 = width;
+		full_region.y2 = height;
+		full_region.valid = true;
+
+		region_count = 1U;
+	} else {
+		region_count = list->count;
+	}
+
+	for (size_t index = 0U; index < region_count; ++index) {
+		const struct lcd_dirty_region *region = NULL;
+		size_t row_bytes = 0U;
+
+		if (true == list->full_refresh) {
+			region = &full_region;
+		} else {
+			region = &list->regions[index];
+		}
+
+		row_bytes = (size_t)(region->x2 - region->x1) * sizeof(uint16_t);
+
+		for (uint16_t y = region->y1; y < region->y2; ++y) {
+			size_t offset = ((size_t)y * width) + region->x1;
+			memcpy(&destination[offset], &source[offset], row_bytes);
+
+			sys_cache_data_flush_range(&destination[offset], row_bytes);
+			copied_bytes += row_bytes;
+		}
+	}
+
+	return copied_bytes;
+}
+
+/**
+ * @brief Aggregate framebuffer synchronization measurements.
+ *
+ * @param[in,out] data LCD driver runtime state.
+ * @param[in] start_cycles CPU cycle counter captured before synchronization.
+ * @param[in] copied_bytes Number of bytes copied between framebuffers.
+ * @param[in] full_refresh Whether the synchronization copied the full frame.
+ *
+ * @note Called by the synchronization context (workqueue for 2 FB,
+ *       display-write thread for 3 FB). Each configuration has one writer.
+ */
+#if (1 == LOG_PRINT)
+static void lcd_sync_stats_update(struct esp32_lcd_cam_rgb_data *data, uint32_t start_cycles,
+								  size_t copied_bytes, bool full_refresh)
+{
+	uint32_t sync_us = k_cyc_to_us_floor32(k_cycle_get_32() - start_cycles);
+
+	data->sync_stats_samples++;
+	data->sync_stats_total_us += sync_us;
+	data->sync_stats_total_bytes += copied_bytes;
+	data->sync_stats_max_us = MAX(data->sync_stats_max_us, sync_us);
+	if (true == full_refresh) {
+		data->sync_stats_full_count++;
+	}
+
+	if (LCD_SYNC_STATS_SAMPLES <= data->sync_stats_samples) {
+		LCD_LOG_INF("FB sync: avg=%u us, max=%u us, avg_bytes=%u, full=%u, samples=%u",
+			    (unsigned int)(data->sync_stats_total_us / data->sync_stats_samples),
+				(unsigned int)data->sync_stats_max_us,
+				(unsigned int)(data->sync_stats_total_bytes / data->sync_stats_samples),
+				(unsigned int)data->sync_stats_full_count, (unsigned int)data->sync_stats_samples);
+
+		data->sync_stats_samples = 0U;
+		data->sync_stats_total_us = 0U;
+		data->sync_stats_total_bytes = 0U;
+		data->sync_stats_max_us = 0U;
+		data->sync_stats_full_count = 0U;
+	}
+}
+#endif
+#endif
+
+#if (3U == LCD_FRAMEBUFFER_COUNT)
+/**
+ * @brief Publish a completed frame in triple-buffering mode.
+ * @param[in,out] data Pointer to the LCD driver runtime state.
+ *
+ * @note Must be called with buffer_lock held.
+ *       The previous READY frame may be replaced before presentation.
+ *       No framebuffer copy is performed here.
+ */
+static void lcd_triple_framebuffer_publish(struct esp32_lcd_cam_rgb_data *data)
+{
+	uint8_t completed_idx = data->back_idx;
+	uint8_t previous_ready_idx = data->ready_idx;
+	uint8_t next_draw_idx = LCD_INVALID_FRAMEBUFFER_IDX;
+
+	/* Track modifications missing from each older framebuffer. */
+	for (size_t index = 0U; index < LCD_FRAMEBUFFER_COUNT; ++index) {
+		if (completed_idx != index) {
+			lcd_dirty_region_list_merge(&data->stale[index], &data->dirty);
+		}
+	}
+
+	if (LCD_INVALID_FRAMEBUFFER_IDX != previous_ready_idx) {
+		/* Mailbox: recycle the older, unpresented READY frame. */
+		next_draw_idx = previous_ready_idx;
+#if (1 == LOG_PRINT)
+		atomic_inc(&data->frame_drop_count);
+#endif
+	} else {
+		/* Find the framebuffer that is neither FRONT nor DRAW. */
+		for (size_t index = 0U; index < LCD_FRAMEBUFFER_COUNT; ++index) {
+			if (((size_t)data->front_idx != index) && ((size_t)completed_idx != index)) {
+				next_draw_idx = (uint8_t)index;
+				break;
+			}
+		}
+	}
+
+	__ASSERT_NO_MSG(LCD_INVALID_FRAMEBUFFER_IDX != next_draw_idx);
+
+	/* Publish the newest completed frame. */
+	data->ready_idx = completed_idx;
+	data->back_idx = next_draw_idx;
+
+	/* Prepare synchronization of the next drawing framebuffer. */
+	data->sync_source_idx = completed_idx;
+	data->sync_target_idx = next_draw_idx;
+	data->sync_region = data->stale[next_draw_idx];
+
+	lcd_dirty_region_list_reset(&data->stale[next_draw_idx]);
+	lcd_dirty_region_list_reset(&data->dirty);
+	data->frame_ready = false;
+
+	/* Prevent new writes until DRAW contains the latest image. */
+	atomic_set(&data->sync_pending, 1);
+}
+
+/**
+ * @brief Synchronize the next DRAW framebuffer with the latest frame.
+ * @param[in,out] data Pointer to the LCD driver runtime state.
+ *
+ * @note Called from thread context without buffer_lock held.
+ *       sync_pending prevents concurrent drawing operations.
+ *       The source may transition from READY to FRONT during copying.
+ *       Both roles remain immutable until synchronization completes.
+ */
+static void lcd_triple_framebuffer_sync(struct esp32_lcd_cam_rgb_data *data)
+{
+	const uint16_t *source = data->framebuffer[data->sync_source_idx];
+	uint16_t *target = data->framebuffer[data->sync_target_idx];
+	/* sync_pending holds DRAW until this copy has completed. */
+#if (1 == LOG_PRINT)
+	uint32_t sync_start = k_cycle_get_32();
+	size_t copied_bytes = lcd_dirty_region_list_copy(&data->sync_region, source, target, 
+													 LCD_HACTIVE, LCD_VACTIVE);
+	lcd_sync_stats_update(data, sync_start, copied_bytes, data->sync_region.full_refresh);
+#else
+	(void)lcd_dirty_region_list_copy(&data->sync_region, source, target, LCD_HACTIVE, LCD_VACTIVE);
+#endif
+
+	/* DRAW is now consistent with the latest completed frame. */
+	atomic_set(&data->sync_pending, 0);
+}
+#endif
+
+/**
+ * @brief Synchronize the presented dirty regions to the inactive framebuffer.
  * @param[in] work Work item embedded in the display driver runtime state.
  *
  * @note sync_pending prevents writes and further flips while this copy runs.
  *       The scanned front framebuffer is never modified by this worker.
  */
+#if (2U == LCD_FRAMEBUFFER_COUNT)
 static void lcd_framebuffer_sync_work_handler(struct k_work *work)
 {
-    struct esp32_lcd_cam_rgb_data *data = CONTAINER_OF(work, struct esp32_lcd_cam_rgb_data, sync_work);
-    const struct lcd_dirty_region region = data->sync_region;
-    const uint16_t *front = data->framebuffer[data->front_idx];
-    uint16_t *back = data->framebuffer[data->back_idx];
-    size_t row_bytes = 0U;
+	struct esp32_lcd_cam_rgb_data *data = CONTAINER_OF(work, struct esp32_lcd_cam_rgb_data, sync_work);
+	const uint16_t *front = data->framebuffer[data->front_idx];
+	uint16_t *back = data->framebuffer[data->back_idx];
+	/* No writes or further swaps are allowed until synchronization finishes. */
+#if (1 == LOG_PRINT)
+	uint32_t sync_start = k_cycle_get_32();
+	size_t copied_bytes = lcd_dirty_region_list_copy(&data->sync_region, front, back, 
+													 LCD_HACTIVE, LCD_VACTIVE);
+	lcd_sync_stats_update(data, sync_start, copied_bytes, data->sync_region.full_refresh);
+#else
+	(void)lcd_dirty_region_list_copy(&data->sync_region, front, back, LCD_HACTIVE, LCD_VACTIVE);
+#endif
 
-    if (true == region.valid) {
-        row_bytes = (size_t)(region.x2 - region.x1) * sizeof(uint16_t);
-
-        for (uint16_t y = region.y1; y < region.y2; ++y) {
-            const size_t offset = (size_t)y * LCD_HACTIVE + region.x1;
-
-            memcpy(&back[offset], &front[offset], row_bytes);
-            sys_cache_data_flush_range(&back[offset], row_bytes);
-        }
-    }
-
-    /* Publish synchronized back-buffer contents to the next display_write(). */
-    atomic_set(&data->sync_pending, 0);
+	atomic_set(&data->sync_pending, 0);
 }
+#endif
 
 /**
  * @brief Acquire exclusive drawing access to the back framebuffer.
@@ -536,46 +854,74 @@ static int lcd_drawing_buffer_lock(struct esp32_lcd_cam_rgb_data *data)
 }
 
 /**
- * @brief Publish the completed back frame before next-frame DMA prefetch begins.
+ * @brief Present a completed framebuffer at the DMA prefetch boundary.
  * @param[in,out] data Pointer to the LCD driver runtime state.
- *
- * @note At EOF (48 - 2), the last two scan segments have already been
- *       prefetched from the old front. The subsequent EOF refills preload
- *       the new front's first 20 lines for the next physical frame.
- *       The expensive synchronization work is only queued at VSYNC.
  */
 static void lcd_present_ready_frame(struct esp32_lcd_cam_rgb_data *data)
 {
-    uint8_t old_front = 0U;
+#if (1U == LCD_FRAMEBUFFER_COUNT)
+	ARG_UNUSED(data);
+	return;
 
-	if (1U == LCD_FRAMEBUFFER_COUNT) {
+#elif (2U == LCD_FRAMEBUFFER_COUNT)
+	uint8_t old_front = 0U;
+
+	if (0 != atomic_get(&data->sync_pending)) {
+#if (1 == LOG_PRINT)
+		atomic_inc(&data->swap_deferred_count);
+#endif
 		return;
 	}
-    if (0 != atomic_get(&data->sync_pending)) {
-        atomic_inc(&data->swap_deferred_count);
-        return;
-    }
-    if (false == atomic_cas(&data->buffer_lock, 0, 1)) {
-        atomic_inc(&data->swap_deferred_count);
-        return;
-    }
-    if ((false == data->frame_ready) || (false == data->dirty.valid) || (0 != atomic_get(&data->sync_pending))) {
-        atomic_set(&data->buffer_lock, 0);
-        return;
-    }
 
-    old_front = data->front_idx;
-    data->front_idx = data->back_idx;
-    data->back_idx = old_front;
+	if (false == atomic_cas(&data->buffer_lock, 0, 1)) {
+#if (1 == LOG_PRINT)
+		atomic_inc(&data->swap_deferred_count);
+#endif
+		return;
+	}
 
-    data->sync_region = data->dirty;
-    data->dirty.valid = false;
-    data->frame_ready = false;
-    atomic_set(&data->sync_pending, 1);
-    atomic_set(&data->sync_retry_needed, 1);
-    atomic_inc(&data->frame_swap_count);
+	if ((false == data->frame_ready) ||
+	    (true == lcd_dirty_region_list_empty(&data->dirty)) || (0 != atomic_get(&data->sync_pending))) {
+		atomic_set(&data->buffer_lock, 0);
+		return;
+	}
 
-    atomic_set(&data->buffer_lock, 0);
+	old_front = data->front_idx;
+	data->front_idx = data->back_idx;
+	data->back_idx = old_front;
+
+	data->sync_region = data->dirty;
+	lcd_dirty_region_list_reset(&data->dirty);
+	data->frame_ready = false;
+
+	atomic_set(&data->sync_pending, 1);
+	atomic_set(&data->sync_retry_needed, 1);
+#if (1 == LOG_PRINT)
+	atomic_inc(&data->frame_swap_count);
+#endif
+
+	atomic_set(&data->buffer_lock, 0);
+
+#elif (3U == LCD_FRAMEBUFFER_COUNT)
+	if (false == atomic_cas(&data->buffer_lock, 0, 1)) {
+#if (1 == LOG_PRINT)
+		atomic_inc(&data->swap_deferred_count);
+#endif
+		return;
+	}
+	
+	if (LCD_INVALID_FRAMEBUFFER_IDX != data->ready_idx) {
+		data->front_idx = data->ready_idx;
+		data->ready_idx = LCD_INVALID_FRAMEBUFFER_IDX;
+
+#if (1 == LOG_PRINT)
+		atomic_inc(&data->frame_swap_count);
+#endif
+	}
+
+	atomic_set(&data->buffer_lock, 0);
+
+#endif
 }
 
 /**
@@ -586,6 +932,7 @@ static void lcd_present_ready_frame(struct esp32_lcd_cam_rgb_data *data)
  *       submitted, the work item is not queued again until the next swap.
  *       If submission fails, the next VSYNC retries it.
  */
+#if (2U == LCD_FRAMEBUFFER_COUNT)
 static void lcd_queue_sync_work(struct esp32_lcd_cam_rgb_data *data)
 {
     int ret = 0;
@@ -597,10 +944,13 @@ static void lcd_queue_sync_work(struct esp32_lcd_cam_rgb_data *data)
     atomic_set(&data->sync_retry_needed, 0);
     ret = k_work_submit(&data->sync_work);
     if (0 > ret) {
+#if (1 == LOG_PRINT)
         atomic_inc(&data->sync_submit_error_count);
+#endif
         atomic_set(&data->sync_retry_needed, 1);
     }
 }
+#endif
 
 /**
  * @brief Fill the selected DMA bounce buffer with framebuffer data.
@@ -612,22 +962,24 @@ static void lcd_queue_sync_work(struct esp32_lcd_cam_rgb_data *data)
 static void lcd_bounce_fill(struct esp32_lcd_cam_rgb_data *data, size_t index)
 {
     size_t offset = data->next_line * LCD_HACTIVE * sizeof(uint16_t);
-    uint32_t start_cycles = 0U;
-    uint32_t elapsed_cycles = 0U;
-    atomic_val_t max_cycles = 0;
+#if (1 == LOG_PRINT)
+	uint32_t start_cycles = k_cycle_get_32();
+	uint32_t elapsed_cycles = 0U;
+	atomic_val_t max_cycles = 0;
+#endif
 
-    start_cycles = k_cycle_get_32();
+	memcpy(data->bounce[index], (const uint8_t *)data->framebuffer[data->front_idx] + offset, LCD_BOUNCE_SIZE);
 
-    memcpy(data->bounce[index], (const uint8_t *)data->framebuffer[data->front_idx] + offset, LCD_BOUNCE_SIZE);
-
-    elapsed_cycles = k_cycle_get_32() - start_cycles;
-    max_cycles = atomic_get(&data->fill_max_cycles);
-    while ((atomic_val_t)elapsed_cycles > max_cycles) {
-        if (true == atomic_cas(&data->fill_max_cycles, max_cycles, (atomic_val_t)elapsed_cycles)) {
-            break;
-        }
-        max_cycles = atomic_get(&data->fill_max_cycles);
-    }
+#if (1 == LOG_PRINT)
+	elapsed_cycles = k_cycle_get_32() - start_cycles;
+	max_cycles = atomic_get(&data->fill_max_cycles);
+	while ((atomic_val_t)elapsed_cycles > max_cycles) {
+		if (true == atomic_cas(&data->fill_max_cycles, max_cycles, (atomic_val_t)elapsed_cycles)) {
+			break;
+		}
+		max_cycles = atomic_get(&data->fill_max_cycles);
+	}
+#endif
 
     data->next_line = (data->next_line + LCD_BOUNCE_LINES) % LCD_VACTIVE;
 }
@@ -650,13 +1002,17 @@ static void lcd_dma_callback(const struct device *dev, void *user_data, uint32_t
     ARG_UNUSED(channel);
 
     if (0 != status) {
+#if (1 == LOG_PRINT)
         atomic_inc(&data->dma_error_count);
+#endif
         return;
     }
 
     index = data->bb_eof_count % LCD_BOUNCE_COUNT;
     data->bb_eof_count++;
+#if (1 == LOG_PRINT)
     atomic_inc(&data->dma_eof_count);
+#endif
 
     /* Complete the current frame's final refill before swapping the source. */
     lcd_bounce_fill(data, index);
@@ -720,7 +1076,7 @@ static void lcd_dma_ring_init(struct esp32_lcd_cam_rgb_data *data)
 
 	sys_cache_data_flush_range(data->dma_desc, sizeof(data->dma_desc));
 	lcd_restart_desc_init(data);
-	LOG_INF("SRAM bounce DMA ring: %u descriptors, %u bytes per buffer", LCD_DMA_DESC_COUNT, LCD_BOUNCE_SIZE);
+	LCD_LOG_INF("SRAM bounce DMA ring: %u descriptors, %u bytes per buffer", LCD_DMA_DESC_COUNT, LCD_BOUNCE_SIZE);
 }
 
 /**
@@ -750,7 +1106,7 @@ static void lcd_rgb_start(struct esp32_lcd_cam_rgb_data *data)
 
 	lcd_ll_start(dev);
 
-	LOG_INF("LCD RGB stream started");
+	LCD_LOG_INF("LCD RGB stream started");
 }
 
 /**
@@ -776,7 +1132,9 @@ static void lcd_vsync_isr(void *arg)
 		return;
 	}
 
+#if (1 == LOG_PRINT)
 	atomic_inc(&data->vsync_count);
+#endif
 
 	/* ESP-IDF: position beyond the first two bounce buffers means we
 	 * have not preloaded the upcoming frame yet. Start at its origin.
@@ -792,10 +1150,14 @@ static void lcd_vsync_isr(void *arg)
 	frame_eof_count = data->bb_eof_count;
 	data->bb_eof_count = 0U;
 	if (frame_eof_count >= LCD_EXPECTED_EOF_PER_FRAME) {
+#if (2U == LCD_FRAMEBUFFER_COUNT)
 		lcd_queue_sync_work(data);
+#endif
 		return;
 	}
+#if (1 == LOG_PRINT)
 	atomic_inc(&data->vsync_restart_count);
+#endif
 
 	/* ESP32-S3: restart from a dedicated descriptor that skips the LCD
 	 * FIFO-preserved pixels. Follow ESP-IDF: reset FIFO, reset GDMA,
@@ -811,7 +1173,9 @@ static void lcd_vsync_isr(void *arg)
 		lcd_bounce_fill(data, 1U);
 	}
 
+#if (2U == LCD_FRAMEBUFFER_COUNT)
 	lcd_queue_sync_work(data);
+#endif
 }
 
 /**
@@ -824,8 +1188,8 @@ static void lcd_vsync_isr(void *arg)
  */
 static int lcd_vsync_irq_init(struct esp32_lcd_cam_rgb_data *data)
 {
-	int ret = esp_intr_alloc(ETS_LCD_CAM_INTR_SOURCE, ESP_INTR_FLAG_INTRDISABLED, lcd_vsync_isr, data,
-							 &data->lcd_intr_handle);
+	int ret = esp_intr_alloc(ETS_LCD_CAM_INTR_SOURCE, ESP_INTR_FLAG_INTRDISABLED, 
+							 lcd_vsync_isr, data, &data->lcd_intr_handle);
 	if (ESP_OK != ret) {
 		LOG_ERR("LCD_CAM IRQ allocation failed (%d)", ret);
 		return -EIO;
@@ -859,34 +1223,35 @@ static int esp32_lcd_cam_rgb_init(const struct device *dev)
 	struct esp32_lcd_cam_rgb_data *data = dev->data;
 	const struct esp32_lcd_cam_rgb_config *config = dev->config;
 	int ret = -1;
-/*
+
 	data->pixel_format = PIXEL_FORMAT_RGB_565X;
 	data->orientation = DISPLAY_ORIENTATION_NORMAL;
 	data->front_idx = 0U;
-	data->back_idx = 1U;
+	data->back_idx = (1U < LCD_FRAMEBUFFER_COUNT) ? (1U) : (0U);
 	data->frame_ready = false;
-	data->dirty.valid = false;
+#if (1U < LCD_FRAMEBUFFER_COUNT)
+	lcd_dirty_region_list_reset(&data->dirty);
+	lcd_dirty_region_list_reset(&data->sync_region);
+#endif
+#if (3U == LCD_FRAMEBUFFER_COUNT)
+	for (size_t index = 0U; index < LCD_FRAMEBUFFER_COUNT; ++index) {
+		lcd_dirty_region_list_reset(&data->stale[index]);
+	}
+#endif
+
+#if (3U == LCD_FRAMEBUFFER_COUNT)
+	data->ready_idx = LCD_INVALID_FRAMEBUFFER_IDX;
+	data->sync_source_idx = 0U;
+	data->sync_target_idx = 0U;
+#endif
 	atomic_set(&data->buffer_lock, 0);
 	atomic_set(&data->sync_pending, 0);
+#if (2U == LCD_FRAMEBUFFER_COUNT)
 	atomic_set(&data->sync_retry_needed, 0);
 	k_work_init(&data->sync_work, lcd_framebuffer_sync_work_handler);
+#endif
 
-	LOG_INF("Initializing ESP32-S3 LCD_CAM RGB display driver (double framebuffer)");
-*/
-	data->pixel_format = PIXEL_FORMAT_RGB_565X;
-	data->orientation = DISPLAY_ORIENTATION_NORMAL;
-	data->front_idx = 0U;
-	data->back_idx = (1U < LCD_FRAMEBUFFER_COUNT) ? 1U : 0U;
-	data->frame_ready = false;
-	data->dirty.valid = false;
-
-	atomic_set(&data->buffer_lock, 0);
-	atomic_set(&data->sync_pending, 0);
-	atomic_set(&data->sync_retry_needed, 0);
-
-	k_work_init(&data->sync_work, lcd_framebuffer_sync_work_handler);
-
-	LOG_INF("Initializing ESP32-S3 LCD_CAM RGB display driver (%u framebuffer(s))", LCD_FRAMEBUFFER_COUNT);
+	LCD_LOG_INF("Initializing ESP32-S3 LCD_CAM RGB display driver (%u framebuffer(s))", LCD_FRAMEBUFFER_COUNT);
 
 	ret = lcd_pinctrl_init();
 	if (ret < 0) {
@@ -920,7 +1285,7 @@ static int esp32_lcd_cam_rgb_init(const struct device *dev)
 	}
 	lcd_rgb_start(data);
 
-	LOG_INF("LCD_CAM RGB initialized: %ux%u", config->width, config->height);
+	LCD_LOG_INF("LCD_CAM RGB initialized: %ux%u", config->width, config->height);
 	return 0;
 }
 
@@ -933,7 +1298,7 @@ static int esp32_lcd_cam_rgb_init(const struct device *dev)
  * @param[in] buf Source pixel data.
  * @return 0 on success or negative errno on failure.
  *
- * @note Dirty regions from partial LVGL flushes are merged. Only the last
+ * @note Dirty regions from partial LVGL flushes are tracked. Only the last
  *       flush (frame_incomplete == false) marks the back buffer ready for
  *       presentation. Synchronization never modifies the scanned front.
  */
@@ -945,6 +1310,7 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
     size_t source_stride = 0U;
     size_t row_bytes = 0U;
     uint16_t *back = NULL;
+#if (1 == LOG_PRINT)
     uint32_t start_cycles = 0U;
     uint32_t elapsed_cycles = 0U;
     uint32_t elapsed_us = 0U;
@@ -953,12 +1319,9 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
     uint32_t write_avg_us = 0U;
     uint32_t write_max_us = 0U;
     uint32_t write_avg_bytes = 0U;
+#endif
     int ret = 0;
-/*
-    if ((NULL == desc) || (NULL == buf) || (NULL == data->framebuffer[0]) || (NULL == data->framebuffer[1])) {
-        return -EINVAL;
-    }
-*/
+
 	if ((NULL == desc) || (NULL == buf) || (NULL == data->framebuffer[data->back_idx])) {
 		return -EINVAL;
 	}
@@ -979,15 +1342,22 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
 
     ret = lcd_drawing_buffer_lock(data);
     if (0 != ret) {
+#if (1 == LOG_PRINT)
         LOG_ERR("Back framebuffer unavailable: %d (VSYNC=%d, swaps=%d, sync=%d)",
                 ret, (int)atomic_get(&data->vsync_count),
                 (int)atomic_get(&data->frame_swap_count),
                 (int)atomic_get(&data->sync_pending));
+#else
+        LOG_ERR("Back framebuffer unavailable: %d (sync=%d)",
+                ret, (int)atomic_get(&data->sync_pending));
+#endif
         return ret;
     }
 
     back = data->framebuffer[data->back_idx];
+#if (1 == LOG_PRINT)
     start_cycles = k_cycle_get_32();
+#endif
 
     for (size_t row = 0U; row < desc->height; ++row) {
         uint16_t *dst = &back[((size_t)y + row) * config->width + x];
@@ -997,21 +1367,33 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
         sys_cache_data_flush_range(dst, row_bytes);
     }
 
+#if (1 == LOG_PRINT)
     elapsed_cycles = k_cycle_get_32() - start_cycles;
     elapsed_us = k_cyc_to_us_floor32(elapsed_cycles);
-/*
-    lcd_dirty_region_add(data, x, y, desc->width, desc->height);
-    if (false == desc->frame_incomplete) {
-        data->frame_ready = true;
-    }
-*/
-	if (1U < LCD_FRAMEBUFFER_COUNT) {
-		lcd_dirty_region_add(data, x, y, desc->width, desc->height);
+#endif
+
+#if (1U < LCD_FRAMEBUFFER_COUNT)
+	{
+		const struct lcd_dirty_region region = {
+			.x1 = x,
+			.y1 = y,
+			.x2 = (uint16_t)((uint32_t)x + desc->width),
+			.y2 = (uint16_t)((uint32_t)y + desc->height),
+			.valid = true,
+		};
+
+		lcd_dirty_region_list_add(&data->dirty, &region);
 		if (false == desc->frame_incomplete) {
+#if (3U == LCD_FRAMEBUFFER_COUNT)
+			lcd_triple_framebuffer_publish(data);
+#else
 			data->frame_ready = true;
+#endif
 		}
 	}
+#endif
 
+#if (1 == LOG_PRINT)
     data->write_count++;
     data->write_total_us += (uint64_t)elapsed_us;
     data->write_total_bytes += (uint64_t)row_bytes * (uint64_t)desc->height;
@@ -1031,10 +1413,17 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
         data->write_total_bytes = 0U;
     }
 
+#endif
     atomic_set(&data->buffer_lock, 0);
+#if (3U == LCD_FRAMEBUFFER_COUNT)
+	if (false == desc->frame_incomplete) {
+		lcd_triple_framebuffer_sync(data);
+	}
+#endif
 
+#if (1 == LOG_PRINT)
     if (true == log_write) {
-        LOG_INF("LCD write: avg=%u us, max=%u us, avg_bytes=%u, samples=%u",
+        LCD_LOG_INF("LCD write: avg=%u us, max=%u us, avg_bytes=%u, samples=%u",
                 write_avg_us, write_max_us, write_avg_bytes, LCD_WRITE_STATS_SAMPLES);
     }
 
@@ -1044,16 +1433,19 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
         const uint32_t max_us = k_cyc_to_us_floor32(max_cycles);
 
         data->last_stats_ms = now_ms;
-        LOG_INF("LCD: fill_max=%u us, EOF=%d, VSYNC=%d, restarts=%d, errors=%d, swaps=%d, defer=%d, sync_err=%d",
-                max_us, (int)atomic_get(&data->dma_eof_count),
-                (int)atomic_get(&data->vsync_count),
-                (int)atomic_get(&data->vsync_restart_count),
-                (int)atomic_get(&data->dma_error_count),
-                (int)atomic_get(&data->frame_swap_count),
-                (int)atomic_get(&data->swap_deferred_count),
-                (int)atomic_get(&data->sync_submit_error_count));
+		LCD_LOG_INF("LCD: fill_max=%u us, EOF=%d, VSYNC=%d, restarts=%d, "
+				"errors=%d, swaps=%d, defer=%d, drops=%d, sync_err=%d",
+				max_us, (int)atomic_get(&data->dma_eof_count),
+				(int)atomic_get(&data->vsync_count),
+				(int)atomic_get(&data->vsync_restart_count),
+				(int)atomic_get(&data->dma_error_count),
+				(int)atomic_get(&data->frame_swap_count),
+				(int)atomic_get(&data->swap_deferred_count),
+				(int)atomic_get(&data->frame_drop_count),
+				(int)atomic_get(&data->sync_submit_error_count));
     }
 
+#endif
     return 0;
 }
 
