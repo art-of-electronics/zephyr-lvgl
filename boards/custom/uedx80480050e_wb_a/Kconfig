@@ -4,3 +4,17 @@ config HEAP_MEM_POOL_ADD_SIZE_BOARD
 	int
 	default 4096 if BOARD_UEDX80480050E_WB_A_ESP32S3_PROCPU
 	default 256 if BOARD_UEDX80480050E_WB_A_ESP32S3_APPCPU
+
+config ESP32_LCD_RGB_FRAMEBUFFER_COUNT
+    int "Number of LCD RGB framebuffers"
+    range 1 2
+    default 2
+    help
+      Select the number of PSRAM framebuffers.
+
+      One framebuffer reduces memory usage but may cause tearing.
+      Two framebuffers enable synchronized, tear-free presentation.
+
+configdefault ESP_SPIRAM_HEAP_SIZE
+    default 1048576 if ESP32_LCD_RGB_FRAMEBUFFER_COUNT = 1
+    default 2097152 if ESP32_LCD_RGB_FRAMEBUFFER_COUNT = 2
