@@ -2,6 +2,7 @@
 #include <zephyr/sys/printk.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/led.h>
+#include <zephyr/drivers/led_strip.h>
 #include <zephyr/drivers/display.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
@@ -23,15 +24,16 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 #define DARK_SAMUS_BLUE     (0x00CFFFU)
 #define DARK_SAMUS_ARMOR	(0x142B5AU)
 
-#define BACKLIGHT_NODE       DT_ALIAS(backlight_pwm)
-#define BACKLIGHT_LED_INDEX  (0U)
+#define RGB_LED_NODE 			DT_ALIAS(led_strip)
+#define BACKLIGHT_NODE      	DT_ALIAS(backlight_pwm)
+#define BACKLIGHT_LED_INDEX 	(0U)
 
-#define VERSION_TEXT_SIZE 	(64U)
+#define VERSION_TEXT_SIZE		(64U)
 
-#define ANIMATION_DURATION_MS (3000U)
-#define ANIMATION_START_X     (40)
-#define ANIMATION_END_X       (660)
-#define ANIMATION_BOX_SIZE    (100)
+#define ANIMATION_DURATION_MS 	(3000U)
+#define ANIMATION_START_X     	(40)
+#define ANIMATION_END_X       	(660)
+#define ANIMATION_BOX_SIZE    	(100)
 
 #define RUN_STRESS_TEST (0)
 extern void stress_test_start(lv_obj_t *screen);
@@ -45,6 +47,7 @@ int main(void)
 {
 	const struct device *backlight_dev = DEVICE_DT_GET(BACKLIGHT_NODE);
     const struct device *display_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
+	static const struct device *const rgb_led = DEVICE_DT_GET(RGB_LED_NODE);
     lv_obj_t *screen = NULL;
 	lv_obj_t *version_label = NULL;
     lv_obj_t *label = NULL;
@@ -53,6 +56,16 @@ int main(void)
     if (true != device_is_ready(display_dev)) {
         return -ENODEV;
     }
+
+	struct led_rgb pixel = {
+		.r = 0U,
+		.g = 10U,
+		.b = 0U,
+	};
+
+	if (true != device_is_ready(rgb_led)) {
+		return -ENODEV;
+	}
 
 	if (true != device_is_ready(backlight_dev)) {
     	LOG_ERR("Backlight device not ready");
@@ -67,6 +80,7 @@ int main(void)
 
 	LOG_INF("LCD RGB started");
 
+	(void)led_strip_update_rgb(rgb_led, &pixel, 1U);
 	(void)display_blanking_off(display_dev);
 	(void)led_set_brightness(backlight_dev, BACKLIGHT_LED_INDEX, 35);
 
@@ -96,13 +110,13 @@ int main(void)
 	lv_obj_set_style_text_font(version_label, &lv_font_montserrat_48, LV_PART_MAIN);
 	lv_obj_set_style_text_color(version_label, lv_color_hex(SAMUS_ORANGE), LV_PART_MAIN);
 	lv_obj_center(version_label);
-/*
+
 	label = lv_label_create(screen);
 	lv_label_set_text(label, "@_art_of_electronics_");
 	lv_obj_set_style_text_font(label, &lv_font_montserrat_28, LV_PART_MAIN);
 	lv_obj_set_style_text_color(label, lv_color_hex(SAMUS_RED), LV_PART_MAIN);
 	lv_obj_align_to(label, version_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 150);
-*/
+
 	box = lv_obj_create(screen);
 	lv_obj_set_size(box, ANIMATION_BOX_SIZE, ANIMATION_BOX_SIZE);
 	lv_obj_set_style_bg_color(box, lv_color_hex(SAMUS_ORANGE), LV_PART_MAIN);
