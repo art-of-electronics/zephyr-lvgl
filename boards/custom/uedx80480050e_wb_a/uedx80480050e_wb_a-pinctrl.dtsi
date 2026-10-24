@@ -80,4 +80,10 @@
         	output-enable;
     	};
 	};
+
+	rmt_ws2812: rmt_ws2812 {
+		group1 {
+			pinmux = <RMT_OUT0_GPIO0>;
+		};
+	};
 };

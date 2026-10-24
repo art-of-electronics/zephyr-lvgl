@@ -6,6 +6,7 @@
 
 #include <zephyr/dt-bindings/input/input-event-codes.h>
 #include <zephyr/dt-bindings/pwm/pwm.h>
+#include <zephyr/dt-bindings/led/led.h>
 #include <espressif/esp32s3/esp32s3_wroom_n16r8.dtsi>
 #include <espressif/partitions_0x0_amp_16M.dtsi>
 #include "uedx80480050e_wb_a-pinctrl.dtsi"
@@ -30,6 +31,7 @@
 		watchdog0 = &wdt0;
 		sdhc0 = &sd0;
 		backlight-pwm = &lcd_backlight;
+		led-strip = &rgb_led;
 	};
 
 	keys: keys {
@@ -44,11 +46,21 @@
 	};
 
 	lcd_backlight: lcd-backlight {
-    compatible = "pwm-leds";
-    backlight {
-        pwms = <&ledc0 0 PWM_HZ(250) PWM_POLARITY_NORMAL>;
+    	compatible = "pwm-leds";
+    	backlight {
+        	pwms = <&ledc0 0 PWM_HZ(250) PWM_POLARITY_NORMAL>;
+		};
     };
-};
+
+	rgb_led: ws2812 {
+		compatible = "worldsemi,ws2812-pulse-io";
+		pulse-ios = <&rmt 0>;
+		chain-length = <1>;
+		color-mapping = <LED_COLOR_ID_GREEN
+				 LED_COLOR_ID_RED
+				 LED_COLOR_ID_BLUE>;
+		reset-delay = <300>;
+	};
 };
 
 &dma {
@@ -190,4 +202,10 @@ zephyr_udc0: &usb_otg {
         reg = <0>;
         timer = <0>;
     };
+};
+
+&rmt {
+	pinctrl-0 = <&rmt_ws2812>;
+	pinctrl-names = "default";
+	status = "okay";
 };
