@@ -30,3 +30,16 @@ config LOG_LCD_CAM_DIAGNOSTICS
     help
       Enable performance measurements and periodic diagnostic logging
       for the ESP32-S3 LCD_CAM RGB display driver.
+
+choice GT911_TOUCHSCREEN_MODE
+    prompt "GT911 touchscreen mode"
+    depends on INPUT_GT911
+    default GT911_TOUCHSCREEN_POLL
+
+config GT911_TOUCHSCREEN_POLL
+    bool "Polling (R33 not mounted)"
+
+config GT911_TOUCHSCREEN_INT
+    bool "Interrupt (R33 mounted)"
+
+endchoice
