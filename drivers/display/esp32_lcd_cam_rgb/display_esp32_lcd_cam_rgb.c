@@ -189,6 +189,17 @@ struct esp32_lcd_cam_rgb_data {
 	bool frame_ready;
 	atomic_t sync_pending;
 
+#if (1 == LOG_PRINT)
+	/* Total display_write() duration, including locking and framebuffer sync. */
+	uint64_t write_call_total_us;
+	uint32_t write_call_max_us;
+	uint32_t write_call_count;
+#if (1U < LCD_FRAMEBUFFER_COUNT)
+	uint32_t sync_stats_total_regions;
+	uint32_t sync_stats_max_regions;
+#endif
+#endif
+
 #if (1U < LCD_FRAMEBUFFER_COUNT)
 	/* A new frame remains immutable while it is presented/synchronized. */
 	struct lcd_dirty_region_list dirty;
@@ -659,7 +670,6 @@ static size_t lcd_dirty_region_list_copy(const struct lcd_dirty_region_list *lis
 			size_t offset = ((size_t)y * width) + region->x1;
 			memcpy(&destination[offset], &source[offset], row_bytes);
 
-			sys_cache_data_flush_range(&destination[offset], row_bytes);
 			copied_bytes += row_bytes;
 		}
 	}
@@ -680,31 +690,43 @@ static size_t lcd_dirty_region_list_copy(const struct lcd_dirty_region_list *lis
  */
 #if (1 == LOG_PRINT)
 static void lcd_sync_stats_update(struct esp32_lcd_cam_rgb_data *data, uint32_t start_cycles,
-								  size_t copied_bytes, bool full_refresh)
+    							  size_t copied_bytes, const struct lcd_dirty_region_list *regions)
 {
-	uint32_t sync_us = k_cyc_to_us_floor32(k_cycle_get_32() - start_cycles);
+    uint32_t sync_us = k_cyc_to_us_floor32(k_cycle_get_32() - start_cycles);
 
-	data->sync_stats_samples++;
-	data->sync_stats_total_us += sync_us;
-	data->sync_stats_total_bytes += copied_bytes;
-	data->sync_stats_max_us = MAX(data->sync_stats_max_us, sync_us);
-	if (true == full_refresh) {
-		data->sync_stats_full_count++;
-	}
+    data->sync_stats_samples++;
+    data->sync_stats_total_us += sync_us;
+    data->sync_stats_total_bytes += copied_bytes;
+    data->sync_stats_max_us = MAX(data->sync_stats_max_us, sync_us);
 
-	if (LCD_SYNC_STATS_SAMPLES <= data->sync_stats_samples) {
-		LCD_LOG_INF("FB sync: avg=%u us, max=%u us, avg_bytes=%u, full=%u, samples=%u",
-			    (unsigned int)(data->sync_stats_total_us / data->sync_stats_samples),
-				(unsigned int)data->sync_stats_max_us,
-				(unsigned int)(data->sync_stats_total_bytes / data->sync_stats_samples),
-				(unsigned int)data->sync_stats_full_count, (unsigned int)data->sync_stats_samples);
+    data->sync_stats_total_regions += regions->count;
+    data->sync_stats_max_regions = MAX(data->sync_stats_max_regions,
+                                       (uint32_t)regions->count);
 
-		data->sync_stats_samples = 0U;
-		data->sync_stats_total_us = 0U;
-		data->sync_stats_total_bytes = 0U;
-		data->sync_stats_max_us = 0U;
-		data->sync_stats_full_count = 0U;
-	}
+    if (true == regions->full_refresh) {
+        data->sync_stats_full_count++;
+    }
+
+    if (LCD_SYNC_STATS_SAMPLES <= data->sync_stats_samples) {
+        LCD_LOG_INF("FB sync: avg=%u us, max=%u us, "
+                    "avg_bytes=%u, avg_regions=%u, max_regions=%u, "
+                    "full=%u, samples=%u",
+                    (unsigned int)(data->sync_stats_total_us / data->sync_stats_samples),
+                    (unsigned int)data->sync_stats_max_us,
+                    (unsigned int)(data->sync_stats_total_bytes / data->sync_stats_samples),
+                    (unsigned int)(data->sync_stats_total_regions / data->sync_stats_samples),
+                    (unsigned int)data->sync_stats_max_regions,
+                    (unsigned int)data->sync_stats_full_count,
+                    (unsigned int)data->sync_stats_samples);
+
+        data->sync_stats_samples = 0U;
+        data->sync_stats_total_us = 0U;
+        data->sync_stats_total_bytes = 0U;
+        data->sync_stats_max_us = 0U;
+        data->sync_stats_total_regions = 0U;
+        data->sync_stats_max_regions = 0U;
+        data->sync_stats_full_count = 0U;
+    }
 }
 #endif
 #endif
@@ -782,9 +804,8 @@ static void lcd_triple_framebuffer_sync(struct esp32_lcd_cam_rgb_data *data)
 	/* sync_pending holds DRAW until this copy has completed. */
 #if (1 == LOG_PRINT)
 	uint32_t sync_start = k_cycle_get_32();
-	size_t copied_bytes = lcd_dirty_region_list_copy(&data->sync_region, source, target, 
-													 LCD_HACTIVE, LCD_VACTIVE);
-	lcd_sync_stats_update(data, sync_start, copied_bytes, data->sync_region.full_refresh);
+	size_t copied_bytes = lcd_dirty_region_list_copy(&data->sync_region, source, target, LCD_HACTIVE, LCD_VACTIVE);
+	lcd_sync_stats_update(data, sync_start, copied_bytes, &data->sync_region);
 #else
 	(void)lcd_dirty_region_list_copy(&data->sync_region, source, target, LCD_HACTIVE, LCD_VACTIVE);
 #endif
@@ -810,9 +831,8 @@ static void lcd_framebuffer_sync_work_handler(struct k_work *work)
 	/* No writes or further swaps are allowed until synchronization finishes. */
 #if (1 == LOG_PRINT)
 	uint32_t sync_start = k_cycle_get_32();
-	size_t copied_bytes = lcd_dirty_region_list_copy(&data->sync_region, front, back, 
-													 LCD_HACTIVE, LCD_VACTIVE);
-	lcd_sync_stats_update(data, sync_start, copied_bytes, data->sync_region.full_refresh);
+	size_t copied_bytes = lcd_dirty_region_list_copy(&data->sync_region, front, back, LCD_HACTIVE, LCD_VACTIVE);
+	lcd_sync_stats_update(data, sync_start, copied_bytes, &data->sync_region);
 #else
 	(void)lcd_dirty_region_list_copy(&data->sync_region, front, back, LCD_HACTIVE, LCD_VACTIVE);
 #endif
@@ -1311,9 +1331,11 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
     size_t row_bytes = 0U;
     uint16_t *back = NULL;
 #if (1 == LOG_PRINT)
+    uint32_t write_start_cycles = k_cycle_get_32();
     uint32_t start_cycles = 0U;
     uint32_t elapsed_cycles = 0U;
     uint32_t elapsed_us = 0U;
+    uint32_t write_call_elapsed_us = 0U;
     uint32_t now_ms = 0U;
     bool log_write = false;
     uint32_t write_avg_us = 0U;
@@ -1322,9 +1344,9 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
 #endif
     int ret = 0;
 
-	if ((NULL == desc) || (NULL == buf) || (NULL == data->framebuffer[data->back_idx])) {
-		return -EINVAL;
-	}
+    if ((NULL == desc) || (NULL == buf) || (NULL == data->framebuffer[data->back_idx])) {
+        return -EINVAL;
+    }
     if ((0U == desc->width) || (0U == desc->height) || (desc->pitch < desc->width)) {
         return -EINVAL;
     }
@@ -1364,7 +1386,6 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
         const uint8_t *src = (const uint8_t *)buf + row * source_stride;
 
         memcpy(dst, src, row_bytes);
-        sys_cache_data_flush_range(dst, row_bytes);
     }
 
 #if (1 == LOG_PRINT)
@@ -1373,34 +1394,32 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
 #endif
 
 #if (1U < LCD_FRAMEBUFFER_COUNT)
-	{
-		const struct lcd_dirty_region region = {
-			.x1 = x,
-			.y1 = y,
-			.x2 = (uint16_t)((uint32_t)x + desc->width),
-			.y2 = (uint16_t)((uint32_t)y + desc->height),
-			.valid = true,
-		};
+    {
+        const struct lcd_dirty_region region = {
+            .x1 = x,
+            .y1 = y,
+            .x2 = (uint16_t)((uint32_t)x + desc->width),
+            .y2 = (uint16_t)((uint32_t)y + desc->height),
+            .valid = true,
+        };
 
-		lcd_dirty_region_list_add(&data->dirty, &region);
-		if (false == desc->frame_incomplete) {
+        lcd_dirty_region_list_add(&data->dirty, &region);
+        if (false == desc->frame_incomplete) {
 #if (3U == LCD_FRAMEBUFFER_COUNT)
-			lcd_triple_framebuffer_publish(data);
+            lcd_triple_framebuffer_publish(data);
 #else
-			data->frame_ready = true;
+            data->frame_ready = true;
 #endif
-		}
-	}
+        }
+    }
 #endif
 
 #if (1 == LOG_PRINT)
+    /* Existing copy-only statistics: keep separate from total call timing. */
     data->write_count++;
     data->write_total_us += (uint64_t)elapsed_us;
     data->write_total_bytes += (uint64_t)row_bytes * (uint64_t)desc->height;
-
-    if (data->write_max_us < elapsed_us) {
-        data->write_max_us = elapsed_us;
-    }
+    data->write_max_us = MAX(data->write_max_us, elapsed_us);
 
     if (LCD_WRITE_STATS_SAMPLES <= data->write_count) {
         write_avg_us = (uint32_t)(data->write_total_us / data->write_count);
@@ -1412,39 +1431,57 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
         data->write_total_us = 0U;
         data->write_total_bytes = 0U;
     }
-
 #endif
+
     atomic_set(&data->buffer_lock, 0);
 #if (3U == LCD_FRAMEBUFFER_COUNT)
-	if (false == desc->frame_incomplete) {
-		lcd_triple_framebuffer_sync(data);
-	}
+    if (false == desc->frame_incomplete) {
+        lcd_triple_framebuffer_sync(data);
+    }
 #endif
 
 #if (1 == LOG_PRINT)
+    /* Entire call: lock wait + pixel copy + publish + optional 3-FB sync. */
+    write_call_elapsed_us = k_cyc_to_us_floor32(k_cycle_get_32() - write_start_cycles);
+    data->write_call_total_us += (uint64_t)write_call_elapsed_us;
+    data->write_call_max_us = MAX(data->write_call_max_us, write_call_elapsed_us);
+    data->write_call_count++;
+
     if (true == log_write) {
         LCD_LOG_INF("LCD write: avg=%u us, max=%u us, avg_bytes=%u, samples=%u",
-                write_avg_us, write_max_us, write_avg_bytes, LCD_WRITE_STATS_SAMPLES);
+                    write_avg_us, write_max_us, write_avg_bytes, LCD_WRITE_STATS_SAMPLES);
     }
 
     now_ms = k_uptime_get_32();
-    if ((now_ms - data->last_stats_ms) >= LCD_STATS_INTERVAL_MS) {
+    if ((uint32_t)(now_ms - data->last_stats_ms) >= LCD_STATS_INTERVAL_MS) {
         const uint32_t max_cycles = (uint32_t)atomic_set(&data->fill_max_cycles, 0);
         const uint32_t max_us = k_cyc_to_us_floor32(max_cycles);
+        const uint32_t call_count = data->write_call_count;
+        const uint32_t call_avg_us = (0U != call_count)
+            ? (uint32_t)(data->write_call_total_us / call_count) : (0U);
 
         data->last_stats_ms = now_ms;
-		LCD_LOG_INF("LCD: fill_max=%u us, EOF=%d, VSYNC=%d, restarts=%d, "
-				"errors=%d, swaps=%d, defer=%d, drops=%d, sync_err=%d",
-				max_us, (int)atomic_get(&data->dma_eof_count),
-				(int)atomic_get(&data->vsync_count),
-				(int)atomic_get(&data->vsync_restart_count),
-				(int)atomic_get(&data->dma_error_count),
-				(int)atomic_get(&data->frame_swap_count),
-				(int)atomic_get(&data->swap_deferred_count),
-				(int)atomic_get(&data->frame_drop_count),
-				(int)atomic_get(&data->sync_submit_error_count));
-    }
+        LCD_LOG_INF("LCD write call: total=%llu us, avg=%u us, max=%u us, calls=%u",
+                    (unsigned long long)data->write_call_total_us,
+                    (unsigned int)call_avg_us,
+                    (unsigned int)data->write_call_max_us,
+                    (unsigned int)call_count);
 
+        data->write_call_total_us = 0U;
+        data->write_call_max_us = 0U;
+        data->write_call_count = 0U;
+
+        LCD_LOG_INF("LCD: fill_max=%u us, EOF=%d, VSYNC=%d, restarts=%d, "
+                    "errors=%d, swaps=%d, defer=%d, drops=%d, sync_err=%d",
+                    max_us, (int)atomic_get(&data->dma_eof_count),
+                    (int)atomic_get(&data->vsync_count),
+                    (int)atomic_get(&data->vsync_restart_count),
+                    (int)atomic_get(&data->dma_error_count),
+                    (int)atomic_get(&data->frame_swap_count),
+                    (int)atomic_get(&data->swap_deferred_count),
+                    (int)atomic_get(&data->frame_drop_count),
+                    (int)atomic_get(&data->sync_submit_error_count));
+    }
 #endif
     return 0;
 }
