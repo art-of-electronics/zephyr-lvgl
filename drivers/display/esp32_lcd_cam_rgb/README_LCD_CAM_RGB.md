@@ -64,7 +64,7 @@ The driver gets panel dimensions and RGB timing parameters from devicetree:
 - Pin assignments: board pinctrl for LCD_CAM.
 - GDMA TX controller and channel: `dmas` entry named `tx` on the LCD_CAM node.
 
-The driver uses **16-bit RGB data** and exposes the Zephyr display format **`PIXEL_FORMAT_RGB_565X`** with normal orientation only. Pixel-clock source frequency is read from the ESP clock tree, divided by `LCD_PERIPH_CLOCK_PRE_SCALE` (currently 2), then the pixel divider is chosen with round-up division. The resulting clock may be below the requested devicetree value.
+The driver uses **16-bit RGB data** and exposes the Zephyr display format **`PIXEL_FORMAT_RGB_565X`**. Four display orientations (0°, 90°, 180°, and 270°) are supported through build-time Kconfig selection.
 
 For the tested configuration the requested pixel clock is **20 MHz** and the panel's physical scanout is approximately **46 Hz**. This scanout rate is separate from the observed application presentation rate; the latter depends on LVGL activity and synchronization overhead.
 
@@ -150,14 +150,42 @@ The driver records **up to 16 independent dirty rectangles** for each synchroniz
 
 The driver registers a Zephyr `DEVICE_API(display, ...)` implementing:
 
-- `write`: copies incoming RGB565X pixels to the drawing framebuffer using CPU `memcpy()`;
+- `write`: copies incoming RGB565X pixels to the drawing framebuffer, applying the configured software rotation; uses CPU `memcpy()` for normal orientation;
 - `get_capabilities`: reports resolution, format and orientation;
 - `set_pixel_format`: accepts only `PIXEL_FORMAT_RGB_565X`;
-- `set_orientation`: accepts only `DISPLAY_ORIENTATION_NORMAL`.
+- `set_orientation`: runtime orientation changes are not supported; orientation is selected at build time.
 
 For each write, the implementation validates destination bounds, pitch and source-buffer size. `desc->frame_incomplete` indicates whether additional flushes belong to the same rendered frame. A complete frame is published **only after the final flush**.
 
 `lcd_drawing_buffer_lock()` waits in thread context for an available DRAW/BACK with a **1,000 ms timeout**; a timeout returns `-ETIMEDOUT` and emits an error log.
+
+### Display orientation
+
+The driver supports four fixed display orientations, selected at build time
+through Kconfig.
+
+| Rotation | Logical resolution | Kconfig |
+|---|---|---|
+| 0° | 800 × 480 | `CONFIG_ESP32_LCD_RGB_ROTATION_0=y` |
+| 90° | 480 × 800 | `CONFIG_ESP32_LCD_RGB_ROTATION_90=y` |
+| 180° | 800 × 480 | `CONFIG_ESP32_LCD_RGB_ROTATION_180=y` |
+| 270° | 480 × 800 | `CONFIG_ESP32_LCD_RGB_ROTATION_270=y` |
+
+Rotation is performed in software during `display_write()`.
+The physical framebuffer geometry (800 × 480) and LCD_CAM/GDMA
+scanout configuration remain unchanged.
+
+For 90° and 270°, the driver swaps the logical display dimensions
+reported through `get_capabilities()`.
+
+Dirty regions are tracked using physical framebuffer coordinates,
+ensuring correct synchronization in double- and triple-buffering modes.
+
+Display orientation is fixed at initialization. Runtime rotation
+is not supported.
+
+All four orientations have been validated on the target hardware,
+including LVGL rendering and GT911 touchscreen interaction.
 
 ## 7. Build configuration
 
@@ -169,6 +197,9 @@ Relevant Kconfig entries (project configuration):
 # Required project/SoC configuration must enable LCD_CAM, GDMA and PSRAM.
 # Set framebuffer count using the driver's existing Kconfig symbol:
 CONFIG_ESP32_LCD_RGB_FRAMEBUFFER_COUNT=3
+
+# Fixed display orientation (choose one):
+CONFIG_ESP32_LCD_RGB_ROTATION_0=y
 
 # Optional driver diagnostics (the project's Kconfig symbol):
 CONFIG_LOG=y
@@ -226,10 +257,10 @@ No GDMA errors, recovery restarts or synchronization errors appeared in the cite
 ## 10. Constraints and maintenance notes
 
 1. **Hardware-specific design.** The ESP32-S3 LCD_CAM and GDMA register-level sequence is not a generic Zephyr RGB display abstraction.
-2. **RGB565X only.** Other formats and display rotations are not implemented.
+2. **RGB565X only.**. Other pixel formats are not implemented. Software rotation supports 0°, 90°, 180°, and 270°, selected at build time. Runtime orientation changes are not supported.
 3. **Fixed bounce/descriptor geometry.** The 10-line, 3,200-byte layout and 16-bit data path are explicitly asserted at build time; changes require recalculating EOF and prefetch behavior.
 4. **PSRAM bandwidth matters.** Both scanout refill and synchronization compete for external-memory bandwidth. More framebuffers do not guarantee higher FPS.
-5. **Cache and DMA memory ownership.** On initialization, framebuffer memory is zeroed and explicitly flushed; DMA descriptors are also flushed after setup. Runtime framebuffer writes and dirty-region synchronization use CPU `memcpy()` into PSRAM, followed by CPU copy from FRONT to internal-SRAM bounce buffers. The current driver does **not** explicitly flush PSRAM destination ranges after every runtime copy. Revisit coherence requirements if the memory-access path or CPU-core assignment changes.
+5. **Cache and DMA memory ownership.** On initialization, framebuffer memory is zeroed and explicitly flushed; DMA descriptors are also flushed after setup. Runtime framebuffer writes use CPU `memcpy()` for normal orientation and software pixel mapping for rotated orientations. Dirty-region synchronization uses CPU `memcpy()` between PSRAM framebuffers, followed by CPU copies from FRONT to internal-SRAM bounce buffers. Revisit coherence requirements if the memory-access path or CPU-core assignment changes.
 6. **Interrupt latency matters.** `lcd_bounce_fill()` executes in the DMA callback path, so avoid expensive diagnostics or blocking operations there.
 7. **Recovery remains a fallback.** A rising `restarts` count during normal running should be investigated rather than accepted as normal behavior.
 8. **Diagnostic overhead.** Compare optimized builds with diagnostics disabled before making production performance claims. The cleaned driver retains lightweight scanout counters, not the detailed per-copy profiling used in earlier tests.
@@ -248,6 +279,7 @@ After modifications to buffer ownership, synchronization, DMA descriptors, or VS
 - Exercise many independent dirty rectangles to verify overflow/full-refresh fallback.
 - Test repeated initialization where applicable and inspect failure cleanup paths.
 - For the LVGL + GT911 milestone, verify press/release behavior and visual updates with the cleaned driver; this is an **integration test**, not a function of the LCD_CAM driver.
+- Verify all four display orientations (0°, 90°, 180°, 270°), including logical resolution, framebuffer synchronization, LVGL rendering and GT911 touch-coordinate mapping.
 
 ## 12. Main implementation entry points
 
@@ -267,4 +299,10 @@ After modifications to buffer ownership, synchronization, DMA descriptors, or VS
 
 ---
 
-**Development status (26 October 2026):** tested on physical hardware with LVGL animations, stress workloads and Zephyr input/GT911 interaction. The LVGL + touch integration milestone is functionally complete, pending the final build and on-board smoke test with the cleaned driver. Portability and production qualification require additional target-specific validation.
+**Development status (26 October 2026):** Tested on physical hardware
+with LVGL animations, stress workloads and Zephyr input/GT911 interaction.
+Display rotation (0°, 90°, 180°, 270°) has been validated with
+correct rendering and touchscreen coordinate mapping.
+The LVGL + touch + display rotation integration milestone is complete.
+Portability and production qualification require additional
+target-specific validation.

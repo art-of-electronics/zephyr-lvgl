@@ -69,6 +69,17 @@ LOG_MODULE_REGISTER(esp32_lcd_cam_rgb, CONFIG_DISPLAY_LOG_LEVEL);
 #define LCD_FRAMEBUFFER_PIXELS      (LCD_HACTIVE * LCD_VACTIVE)
 #define LCD_FRAMEBUFFER_SIZE        (LCD_FRAMEBUFFER_PIXELS * sizeof(uint16_t))
 #define LCD_FRAMEBUFFER_COUNT       (CONFIG_ESP32_LCD_RGB_FRAMEBUFFER_COUNT)
+
+#if defined(CONFIG_ESP32_LCD_RGB_ROTATION_90)
+#define LCD_INITIAL_ORIENTATION DISPLAY_ORIENTATION_ROTATED_90
+#elif defined(CONFIG_ESP32_LCD_RGB_ROTATION_180)
+#define LCD_INITIAL_ORIENTATION DISPLAY_ORIENTATION_ROTATED_180
+#elif defined(CONFIG_ESP32_LCD_RGB_ROTATION_270)
+#define LCD_INITIAL_ORIENTATION DISPLAY_ORIENTATION_ROTATED_270
+#else
+#define LCD_INITIAL_ORIENTATION DISPLAY_ORIENTATION_NORMAL
+#endif
+
 #define LCD_INVALID_FRAMEBUFFER_IDX (UINT8_MAX)
 #define LCD_MAX_DIRTY_REGIONS       (16U) /* Independent dirty rectangles. */
 
@@ -1148,7 +1159,8 @@ static int esp32_lcd_cam_rgb_init(const struct device *dev)
 	int ret = -1;
 
 	data->pixel_format = PIXEL_FORMAT_RGB_565X;
-	data->orientation = DISPLAY_ORIENTATION_NORMAL;
+	//data->orientation = DISPLAY_ORIENTATION_NORMAL;
+	data->orientation = LCD_INITIAL_ORIENTATION;
 	data->front_idx = 0U;
 	data->back_idx = (1U < LCD_FRAMEBUFFER_COUNT) ? (1U) : (0U);
 	data->frame_ready = false;
@@ -1257,16 +1269,22 @@ static void lcd_log_diagnostics(struct esp32_lcd_cam_rgb_data *data)
  *       presentation. Synchronization never modifies the scanned front.
  */
 static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_t y,
-				    const struct display_buffer_descriptor *desc, const void *buf)
+				    			   const struct display_buffer_descriptor *desc, const void *buf)
 {
 	struct esp32_lcd_cam_rgb_data *data = dev->data;
 	const struct esp32_lcd_cam_rgb_config *config = dev->config;
 	size_t source_stride = 0U;
 	size_t row_bytes = 0U;
+	uint16_t logical_width = 0U;
+	uint16_t logical_height = 0U;
+	uint16_t physical_x = 0U;
+	uint16_t physical_y = 0U;
+	uint16_t physical_width = 0U;
+	uint16_t physical_height = 0U;
 	uint16_t *back = NULL;
 	int ret = 0;
 
-	if ((NULL == desc) || (NULL == buf) || (NULL == data->framebuffer[data->back_idx])) {
+	if ((NULL == desc) || (NULL == buf)) {
 		return -EINVAL;
 	}
 
@@ -1274,7 +1292,17 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
 		return -EINVAL;
 	}
 
-	if (((uint32_t)x + desc->width > config->width) || ((uint32_t)y + desc->height > config->height)) {
+	logical_width = config->width;
+	logical_height = config->height;
+
+	if ((DISPLAY_ORIENTATION_ROTATED_90 == data->orientation) ||
+    	(DISPLAY_ORIENTATION_ROTATED_270 == data->orientation)) {
+		logical_width = config->height;
+		logical_height = config->width;
+	}
+
+	if (((uint32_t)x + desc->width > logical_width) ||
+    	((uint32_t)y + desc->height > logical_height)) {
 		return -EINVAL;
 	}
 
@@ -1294,24 +1322,96 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
 	}
 
 	back = data->framebuffer[data->back_idx];
-	for (size_t row = 0U; row < desc->height; ++row) {
-		uint16_t *dst = &back[((size_t)y + row) * config->width + x];
-		const uint8_t *src = (const uint8_t *)buf + row * source_stride;
+	if (NULL == back) {
+		atomic_set(&data->buffer_lock, 0);
+		return -EINVAL;
+	}
 
-		memcpy(dst, src, row_bytes);
+	physical_x = x;
+	physical_y = y;
+	physical_width = desc->width;
+	physical_height = desc->height;
+
+	switch (data->orientation) {
+		case DISPLAY_ORIENTATION_NORMAL:
+		break;
+	
+	case DISPLAY_ORIENTATION_ROTATED_90:
+		physical_x = (uint16_t)((uint32_t)config->width - ((uint32_t)y + desc->height));
+		physical_y = x;
+		physical_width = desc->height;
+		physical_height = desc->width;
+		break;
+
+	case DISPLAY_ORIENTATION_ROTATED_180:
+		physical_x = (uint16_t)((uint32_t)config->width - ((uint32_t)x + desc->width));
+		physical_y = (uint16_t)((uint32_t)config->height - ((uint32_t)y + desc->height));
+		break;
+
+	case DISPLAY_ORIENTATION_ROTATED_270:
+		physical_x = y;
+		physical_y = (uint16_t)((uint32_t)config->height - ((uint32_t)x + desc->width));
+		physical_width = desc->height;
+		physical_height = desc->width;
+		break;
+
+	default:
+		atomic_set(&data->buffer_lock, 0);
+		return -ENOTSUP;
+	}
+
+	if (DISPLAY_ORIENTATION_NORMAL == data->orientation) {
+		for (size_t row = 0U; row < desc->height; ++row) {
+			uint16_t *dst = &back[((size_t)y + row) * config->width + x];
+			const uint8_t *src = (const uint8_t *)buf + row * source_stride;
+
+			memcpy(dst, src, row_bytes);
+		}
+	} else {
+		for (size_t row = 0U; row < desc->height; ++row) {
+			const uint16_t *src = (const uint16_t *)((const uint8_t *)buf + row * source_stride);
+
+			for (size_t col = 0U; col < desc->width; ++col) {
+				size_t dst_x = 0U;
+				size_t dst_y = 0U;
+
+				switch (data->orientation) {
+					case DISPLAY_ORIENTATION_ROTATED_90:
+						dst_x = (size_t)config->width - 1U - ((size_t)y + row);
+						dst_y = (size_t)x + col;
+						break;
+
+				case DISPLAY_ORIENTATION_ROTATED_180:
+					dst_x = (size_t)config->width - 1U - ((size_t)x + col);
+					dst_y = (size_t)config->height - 1U - ((size_t)y + row);
+					break;
+
+				case DISPLAY_ORIENTATION_ROTATED_270:
+					dst_x = (size_t)y + row;
+					dst_y = (size_t)config->height - 1U - ((size_t)x + col);
+					break;
+
+				default:
+					break;
+				}
+
+				back[dst_y * config->width + dst_x] = src[col];
+			}
+		}
 	}
 
 #if (1U < LCD_FRAMEBUFFER_COUNT)
 	{
 		const struct lcd_dirty_region region = {
-			.x1 = x,
-			.y1 = y,
-			.x2 = (uint16_t)((uint32_t)x + desc->width),
-			.y2 = (uint16_t)((uint32_t)y + desc->height),
+			.x1 = physical_x,
+			.y1 = physical_y,
+			.x2 = (uint16_t)((uint32_t)physical_x + physical_width),
+			.y2 = (uint16_t)((uint32_t)physical_y + physical_height),
 			.valid = true,
 		};
 
 		lcd_dirty_region_list_add(&data->dirty, &region);
+
 		if (false == desc->frame_incomplete) {
 #if (3U == LCD_FRAMEBUFFER_COUNT)
 			lcd_triple_framebuffer_publish(data);
@@ -1323,6 +1423,7 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
 #endif
 
 	atomic_set(&data->buffer_lock, 0);
+
 #if (3U == LCD_FRAMEBUFFER_COUNT)
 	if (false == desc->frame_incomplete) {
 		lcd_triple_framebuffer_sync(data);
@@ -1332,6 +1433,7 @@ static int esp32_lcd_cam_rgb_write(const struct device *dev, uint16_t x, uint16_
 #if (1 == LOG_PRINT)
 	lcd_log_diagnostics(data);
 #endif
+
 	return 0;
 }
 
@@ -1347,8 +1449,14 @@ static void esp32_lcd_cam_rgb_get_capabilities(const struct device *dev, struct 
 
 	memset(capabilities, 0, sizeof(*capabilities));
 
-	capabilities->x_resolution = config->width;
-	capabilities->y_resolution = config->height;
+	if ((DISPLAY_ORIENTATION_ROTATED_90 == data->orientation) || 
+	    (DISPLAY_ORIENTATION_ROTATED_270 == data->orientation)) {
+		capabilities->x_resolution = config->height;
+		capabilities->y_resolution = config->width;
+	} else {
+		capabilities->x_resolution = config->width;
+		capabilities->y_resolution = config->height;
+	}
 
 	capabilities->supported_pixel_formats = PIXEL_FORMAT_RGB_565X;
 	capabilities->current_pixel_format = data->pixel_format;
