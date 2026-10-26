@@ -9,8 +9,17 @@ project(viewe_lvgl_demo)
 
 target_include_directories(app PRIVATE src)
 
+if(BOARD STREQUAL "uedx80480050e_wb_a")
+    target_sources(app PRIVATE src/main_8048.c)
+
+elseif(BOARD STREQUAL "uedx48270043e_wb_a")
+    target_sources(app PRIVATE src/main_4827.c)
+
+else()
+    message(FATAL_ERROR "Unsupported board for viewe_lvgl_demo: ${BOARD}")
+endif()
+
 target_sources(app PRIVATE
-    src/main.c
     src/test_stress_test.c
 )
 

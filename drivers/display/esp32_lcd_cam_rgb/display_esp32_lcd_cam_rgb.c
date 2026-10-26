@@ -83,10 +83,10 @@ LOG_MODULE_REGISTER(esp32_lcd_cam_rgb, CONFIG_DISPLAY_LOG_LEVEL);
 #define LCD_INVALID_FRAMEBUFFER_IDX (UINT8_MAX)
 #define LCD_MAX_DIRTY_REGIONS       (16U) /* Independent dirty rectangles. */
 
-#define LCD_BOUNCE_LINES            (10U)
+#define LCD_BOUNCE_LINES            (8U)
 #define LCD_BOUNCE_COUNT            (2U)
 #define LCD_BOUNCE_SIZE             (LCD_HACTIVE * LCD_BOUNCE_LINES * sizeof(uint16_t))
-#define LCD_DMA_DESC_SIZE           (3200U)
+#define LCD_DMA_DESC_SIZE           (1280U)
 #define LCD_DESCS_PER_BOUNCE        (LCD_BOUNCE_SIZE / LCD_DMA_DESC_SIZE)
 #define LCD_DMA_DESC_COUNT          (LCD_DESCS_PER_BOUNCE * LCD_BOUNCE_COUNT)
 #define LCD_FIFO_SKIP_BYTES         ((LCD_LL_FIFO_DEPTH + 1U) * sizeof(uint16_t))

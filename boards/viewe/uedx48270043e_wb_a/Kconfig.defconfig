@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+
+if BOARD_UEDX48270043E_WB_A_ESP32S3_PROCPU
+
+config ESP_SPIRAM
+	default y
+
+choice SPIRAM_MODE
+	default SPIRAM_MODE_OCT
+endchoice
+
+if DISPLAY
+
+if LVGL
+
+configdefault LV_COLOR_16_SWAP
+	default y
+
+config LV_Z_VDB_SIZE
+	default 100
+
+config LV_Z_VDB_CUSTOM_SECTION
+	default y
+
+config LV_Z_MEMORY_POOL_CUSTOM_SECTION
+	default y
+
+endif # LVGL
+
+config REGULATOR
+	default y
+
+endif # DISPLAY
+
+configdefault INPUT_GT911_INTERRUPT
+    default y if GT911_TOUCHSCREEN_INT
+
+configdefault INPUT_GT911_PERIOD_MS
+    default 50 if GT911_TOUCHSCREEN_POLL
+
+endif # BOARD_UEDX48270043E_WB_A_ESP32S3_PROCPU

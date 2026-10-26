@@ -1,95 +1,144 @@
 # ESP32-S3 LCD_CAM RGB display driver (Zephyr)
 
-Custom Zephyr display driver for the **ESP32-S3 LCD_CAM** peripheral operating in parallel RGB mode. Developed and tested on the **VIEWE UEDX80480050E-WB-A** display board (ESP32-S3-WROOM-1 N16R8, 800 × 480 RGB panel).
+Custom Zephyr display driver for the **ESP32-S3 LCD_CAM** peripheral operating in parallel RGB mode.
 
 The driver implements continuous RGB scanout using a circular **GDMA descriptor ring**, two internal-SRAM **bounce buffers**, and **1, 2, or 3 framebuffers in external PSRAM**. Double- and triple-buffering synchronize framebuffer presentation with the scanout prefetch boundary and use per-region synchronization to avoid unnecessary PSRAM traffic.
 
-> **Scope:** This README documents the current implementation, not a generic ESP32-S3 RGB controller. Clock, DMA sizing, bounce geometry, and synchronization have been validated for the board above. Other panels require additional validation.
+Panel dimensions, RGB timing parameters, LCD_CAM pin assignments, and the GDMA channel come from **devicetree**. The same driver has been brought up on both 800 × 480 and 480 × 272 ESP32-S3 display boards without panel-specific driver branches.
+
+> **Scope:** This README documents the current ESP32-S3 LCD_CAM RGB driver implementation, not a generic RGB controller or any particular board definition. The supported data path and DMA geometry have been exercised on the hardware listed below; other resolutions, timings, and memory configurations require validation.
+
+### Validated hardware
+
+| Board | Panel resolution | Requested pixel clock | Status |
+| --- | --- | ---: | --- |
+| VIEWE UEDX80480050E-WB-A v1.2 | 800 × 480 | 20 MHz | Working; extensive LVGL, framebuffer, rotation, and touch integration testing |
+| VIEWE UEDX80480043E-WB-A v1.3 (480 × 272 variant) | 480 × 272 | 16 MHz | Display operational with the shared driver; full regression matrix pending |
+
+Both boards use an ESP32-S3 platform with external PSRAM. The requested pixel clocks above are **board/panel configuration values**, not hard-coded driver settings or independent measurements of the actual output clock. Board-specific RGB porches, sync timings, pinctrl, PSRAM setup, and touchscreen wiring belong in the respective board definitions.
 
 ## 1. Architecture
 
 ```text
-         LVGL / Zephyr display API
-                    |
-           display_write()
-                    |
-              DRAW buffer
-              (PSRAM, RGB565X)
-                    |
-      [1 FB: shared with FRONT]
-      [2 FB: FRONT / BACK + sync]
-      [3 FB: FRONT / READY / DRAW]
-                    |
-           FRONT framebuffer
-              (external PSRAM)
-                    |
-           lcd_bounce_fill()
-             memcpy, in ISR
-                    |
-        +-------------------------+
-        | SRAM bounce 0 (10 lines)| <---+
-        | SRAM bounce 1 (10 lines)| <---+ alternating refills
-        +-------------------------+
-                    |
-           GDMA descriptor ring
-            (circular, 10 nodes)
-                    |
-            LCD_CAM RGB output
-                    |
-             800 x 480 panel
+           LVGL / Zephyr display API
+                      |
+                display_write()
+                      |
+                 DRAW buffer
+               (PSRAM, RGB565X)
+                      |
+        [1 FB: shared with FRONT]
+        [2 FB: FRONT / BACK + sync]
+        [3 FB: FRONT / READY / DRAW]
+                      |
+               FRONT framebuffer
+                 (external PSRAM)
+                      |
+               lcd_bounce_fill()
+                 memcpy, in ISR
+                      |
+           +------------------------+
+           | SRAM bounce 0 (8 lines)| <---+
+           | SRAM bounce 1 (8 lines)| <---+ alternating refills
+           +------------------------+
+                      |
+              GDMA descriptor ring
+       (circular; size depends on width)
+                      |
+               LCD_CAM RGB output
+                      |
+              RGB panel (from DTS)
 ```
 
 The **LCD timing engine runs continuously**. GDMA consumes descriptor-backed SRAM data while the GDMA EOF callback refills the freed bounce buffer from the currently selected front framebuffer. The code contains a VSYNC recovery path for underruns; this is not a normal per-frame restart.
 
-**Memory at the tested resolution:**
+### Memory requirements
 
-| Resource | Geometry | Size |
-| --- | --- | ---: |
-| One PSRAM framebuffer | 800 × 480 × 2 bytes | 768,000 B (750 KiB) |
-| 1 / 2 / 3 framebuffers | RGB565X | 750 / 1,500 / 2,250 KiB |
-| One SRAM bounce buffer | 800 × 10 × 2 bytes | 16,000 B |
-| Both SRAM bounce buffers | 2 × 16,000 bytes | 32,000 B |
-| One DMA descriptor payload | 3,200 bytes | 3,200 B |
-| GDMA descriptor ring | 5 descriptors per bounce × 2 | 10 descriptors |
+The framebuffer size is calculated from the configured physical panel dimensions:
 
-Descriptor bookkeeping, synchronization state, work items (2 FB), and optional diagnostics require additional memory. Framebuffers are allocated from the external-memory shared heap with **32-byte alignment**.
+```text
+framebuffer_size     = width × height × 2 bytes
+bounce_buffer_size   = width × LCD_BOUNCE_LINES × 2 bytes
+bounce_storage_total = LCD_BOUNCE_COUNT × bounce_buffer_size
+```
+
+With the current 8-line bounce buffers and 1,280-byte DMA payloads:
+
+| Resource | 800 × 480 | 480 × 272 |
+| --- | ---: | ---: |
+| One PSRAM framebuffer (RGB565X) | 768,000 B (750 KiB) | 261,120 B (255 KiB) |
+| 1 / 2 / 3 PSRAM framebuffers | 750 / 1,500 / 2,250 KiB | 255 / 510 / 765 KiB |
+| One internal-SRAM bounce buffer | 12,800 B | 7,680 B |
+| Both bounce buffers | 25,600 B | 15,360 B |
+| One DMA descriptor payload | 1,280 B | 1,280 B |
+| Descriptors per bounce buffer | 10 | 6 |
+| Total descriptors in the circular ring | 20 | 12 |
+
+Descriptor bookkeeping, synchronization state, work items (2 FB), and optional diagnostics require additional memory. Framebuffers are allocated from the external-memory shared heap with **32-byte alignment**. Descriptor payload size is **not** the memory consumed by each descriptor structure.
 
 ## 2. RGB and clock configuration
 
-The driver gets panel dimensions and RGB timing parameters from devicetree:
+The driver obtains panel geometry and RGB timings from devicetree:
 
 - Compatible: `espressif,esp32-lcd-cam-rgb` (C macro `espressif_esp32_lcd_cam_rgb`).
 - LCD_CAM hardware node: `DT_NODELABEL(lcd_cam)`.
-- Display width/height and `display_timings` child: `clock-frequency`, horizontal/vertical sync length, back porch, and front porch.
-- Pin assignments: board pinctrl for LCD_CAM.
+- Display `width`, `height`, and the `display_timings` child: `clock-frequency`, horizontal/vertical sync length, back porch, and front porch.
+- Pin assignments: LCD_CAM pinctrl in the board definition.
 - GDMA TX controller and channel: `dmas` entry named `tx` on the LCD_CAM node.
 
 The driver uses **16-bit RGB data** and exposes the Zephyr display format **`PIXEL_FORMAT_RGB_565X`**. Four display orientations (0°, 90°, 180°, and 270°) are supported through build-time Kconfig selection.
 
-For the tested configuration the requested pixel clock is **20 MHz** and the panel's physical scanout is approximately **46 Hz**. This scanout rate is separate from the observed application presentation rate; the latter depends on LVGL activity and synchronization overhead.
+The pixel clock and porch values are **properties of the attached RGB panel**, not constants imposed by the driver. Do not copy timings blindly between board DTS files, even when the same firmware appears to display an image on both panels.
+
+The physical scanout rate depends on the generated pixel clock and the complete horizontal and vertical timing periods; it is distinct from the LVGL rendering rate and the driver's completed framebuffer-presentation rate.
 
 ## 3. GDMA scanout and VSYNC boundary
 
-Constants in the current driver:
+Current driver constants and geometry:
 
 ```c
-#define LCD_BOUNCE_LINES            (10U)
+#define LCD_BOUNCE_LINES            (8U)
 #define LCD_BOUNCE_COUNT            (2U)
-#define LCD_DMA_DESC_SIZE           (3200U)
+#define LCD_BOUNCE_SIZE             (LCD_HACTIVE * LCD_BOUNCE_LINES * sizeof(uint16_t))
+#define LCD_DMA_DESC_SIZE           (1280U)
+#define LCD_DESCS_PER_BOUNCE        (LCD_BOUNCE_SIZE / LCD_DMA_DESC_SIZE)
+#define LCD_DMA_DESC_COUNT          (LCD_DESCS_PER_BOUNCE * LCD_BOUNCE_COUNT)
 #define LCD_EXPECTED_EOF_PER_FRAME  (LCD_VACTIVE / LCD_BOUNCE_LINES)
 #define LCD_PRESENT_PREFETCH_EOF    (LCD_EXPECTED_EOF_PER_FRAME - LCD_BOUNCE_COUNT)
 ```
 
-At 480 lines, the driver expects **48 bounce-buffer EOF events per complete frame**. Each bounce buffer spans 10 lines, so the two buffers carry 20 lines in flight. The GDMA ring is circular, and each descriptor is owned by DMA.
+These are **common driver settings**, not board-specific conditionals. `LCD_BOUNCE_SIZE`, the number of descriptors, and the expected EOF count are derived from the dimensions supplied by devicetree. The fixed descriptor payload size happens to satisfy the constraints of both validated panels; it is **not guaranteed** to work for an arbitrary new resolution.
+
+| Scanout parameter | 800 × 480 | 480 × 272 |
+| --- | ---: | ---: |
+| Bounce-buffer lines | 8 | 8 |
+| DMA descriptors per bounce | 10 | 6 |
+| Expected bounce-buffer EOF events per frame | 60 | 34 |
+| Presentation prefetch EOF threshold | 58 | 32 |
+| Lines held across two bounce buffers | 16 | 16 |
 
 The callback sequence is:
 
 1. GDMA reports completion of a bounce-buffer group (`suc_eof` on the final descriptor for that group).
-2. `lcd_dma_callback()` refills the released bounce buffer with the next 10 lines from FRONT.
-3. At `LCD_PRESENT_PREFETCH_EOF` (46 in the tested configuration), the driver considers a change of FRONT for the next frame.
+2. `lcd_dma_callback()` refills the released bounce buffer with the next `LCD_BOUNCE_LINES` lines from FRONT.
+3. At `LCD_PRESENT_PREFETCH_EOF`, the driver considers a change of FRONT for the next frame.
 4. `lcd_vsync_isr()` maintains line/EOF bookkeeping and checks whether a recovery restart is needed.
 
 The **prefetch boundary**, rather than an arbitrary write-completion timestamp, determines when FRONT may switch. This is essential because the DMA pipeline already contains data for upcoming display lines.
+
+### DMA geometry constraints
+
+Compile-time `BUILD_ASSERT` checks require, among other things:
+
+- The display height to be divisible by `LCD_BOUNCE_LINES`.
+- `LCD_BOUNCE_SIZE` to be divisible by `LCD_DMA_DESC_SIZE`.
+- Descriptor payload size to be no greater than 4,095 bytes and aligned to the configured GDMA PSRAM burst size (32 bytes).
+- Bounce buffers and framebuffers to satisfy 32-byte cache alignment.
+- The descriptor size to be larger than the FIFO-skip byte count used during recovery.
+- Enough EOF groups per frame to leave room for the two-buffer prefetch pipeline.
+- Sufficient configured external-memory heap for the requested framebuffer count.
+
+A different panel resolution may therefore require revisiting the **shared** DMA geometry. Do not remove these assertions to make an unsupported geometry compile.
 
 ### VSYNC recovery
 
@@ -161,47 +210,36 @@ For each write, the implementation validates destination bounds, pitch and sourc
 
 ### Display orientation
 
-The driver supports four fixed display orientations, selected at build time
-through Kconfig.
+The driver supports four fixed display orientations selected at build time through Kconfig. Let `W` and `H` be the physical panel dimensions read from devicetree (`LCD_HACTIVE` and `LCD_VACTIVE`).
 
 | Rotation | Logical resolution | Kconfig |
-|---|---|---|
-| 0° | 800 × 480 | `CONFIG_ESP32_LCD_RGB_ROTATION_0=y` |
-| 90° | 480 × 800 | `CONFIG_ESP32_LCD_RGB_ROTATION_90=y` |
-| 180° | 800 × 480 | `CONFIG_ESP32_LCD_RGB_ROTATION_180=y` |
-| 270° | 480 × 800 | `CONFIG_ESP32_LCD_RGB_ROTATION_270=y` |
+| --- | --- | --- |
+| 0° | W × H | `CONFIG_ESP32_LCD_RGB_ROTATION_0=y` |
+| 90° | H × W | `CONFIG_ESP32_LCD_RGB_ROTATION_90=y` |
+| 180° | W × H | `CONFIG_ESP32_LCD_RGB_ROTATION_180=y` |
+| 270° | H × W | `CONFIG_ESP32_LCD_RGB_ROTATION_270=y` |
 
-Rotation is performed in software during `display_write()`.
-The physical framebuffer geometry (800 × 480) and LCD_CAM/GDMA
-scanout configuration remain unchanged.
+Rotation is performed in software during `display_write()`. The **physical framebuffer geometry remains W × H**, and the physical LCD_CAM/GDMA scanout timing is unchanged by logical orientation.
 
-For 90° and 270°, the driver swaps the logical display dimensions
-reported through `get_capabilities()`.
+For 90° and 270°, the driver swaps the logical display dimensions reported through `get_capabilities()`. Dirty regions are tracked using physical framebuffer coordinates, ensuring correct synchronization in double- and triple-buffering modes.
 
-Dirty regions are tracked using physical framebuffer coordinates,
-ensuring correct synchronization in double- and triple-buffering modes.
-
-Display orientation is fixed at initialization. Runtime rotation
-is not supported.
-
-All four orientations have been validated on the target hardware,
-including LVGL rendering and GT911 touchscreen interaction.
+Display orientation is fixed at initialization; runtime rotation is not supported. All four orientations, LVGL rendering, and GT911 touch-coordinate mapping were validated during development on the **800 × 480** board. The corresponding full rotation/touch regression on the **480 × 272** board remains to be completed.
 
 ## 7. Build configuration
 
-The tested project uses Zephyr **4.4** and the board definition under `boards/viewe/uedx80480050e_wb_a/`, with external PSRAM enabled, LCD_CAM RGB pinctrl and GDMA TX configured in devicetree. The `boards/viewe/` directory groups VIEWE board definitions; it is not a driver requirement.
+The implementation was developed with Zephyr **4.4** and an ESP32-S3 board configuration enabling external PSRAM, LCD_CAM RGB pinctrl, and GDMA TX. Board-specific setup is maintained separately from this driver README.
 
 Relevant Kconfig entries (project configuration):
 
 ```ini
 # Required project/SoC configuration must enable LCD_CAM, GDMA and PSRAM.
-# Set framebuffer count using the driver's existing Kconfig symbol:
+# Select the driver's framebuffer count (1, 2 or 3):
 CONFIG_ESP32_LCD_RGB_FRAMEBUFFER_COUNT=3
 
 # Fixed display orientation (choose one):
 CONFIG_ESP32_LCD_RGB_ROTATION_0=y
 
-# Optional driver diagnostics (the project's Kconfig symbol):
+# Optional driver diagnostics:
 CONFIG_LOG=y
 CONFIG_LOG_LCD_CAM_DIAGNOSTICS=y
 ```
@@ -214,11 +252,11 @@ The project's Kconfig defines `LOG_LCD_CAM_DIAGNOSTICS` as a boolean. The driver
 
 Set `CONFIG_LOG_LCD_CAM_DIAGNOSTICS=n` to compile out optional scanout counters and the bounce-fill timing measurement. The per-write and framebuffer-sync timing aggregators used during development have been removed from the cleaned driver. **Error logs remain subject to the standard Zephyr logging configuration**. Do not confuse this optional switch with `CONFIG_DISPLAY_LOG_LEVEL`: logging must still be enabled at an appropriate level for INFO records to appear.
 
-> **Integration note:** The Kconfig and devicetree fragments above describe the symbols used by this driver. The precise board-specific pinctrl/clock/PSRAM setup belongs to the board definition and is not reproduced here; no universally valid board overlay is implied.
+> **Integration note:** These Kconfig and devicetree properties describe the interface expected by the driver. Exact board-specific pinctrl, panel timings, PSRAM setup, and input/touch configuration are intentionally not reproduced here. There is no universally valid board overlay.
 
 ## 8. Diagnostics
 
-When `CONFIG_LOG_LCD_CAM_DIAGNOSTICS=y`, the **cleaned driver** reports a periodic `LCD:` status line with the following fields. Counters other than `fill_max` are cumulative since startup:
+When `CONFIG_LOG_LCD_CAM_DIAGNOSTICS=y`, the driver reports a periodic `LCD:` status line with the following fields. Counters other than `fill_max` are cumulative since startup:
 
 | Output | Meaning |
 | --- | --- |
@@ -234,11 +272,11 @@ When `CONFIG_LOG_LCD_CAM_DIAGNOSTICS=y`, the **cleaned driver** reports a period
 
 The periodic status line is emitted from `display_write()` once the configured reporting interval (currently 1,000 ms) has elapsed; it is **not a hardware timer callback**. If the application stops issuing writes, periodic diagnostic lines also stop. `fill_max` is reset after each report; the other counters are not reset.
 
-The *swaps-per-second* figure inferred from consecutive `swaps` samples is the **presentation rate**, not necessarily the LVGL render-loop rate or the panel's physical refresh rate.
+The **swaps-per-second** figure inferred from consecutive `swaps` samples is the **presentation rate**, not necessarily the LVGL render-loop rate or the panel's physical refresh rate.
 
-## 9. Measured results (development tests)
+## 9. Measured results (historical development tests)
 
-Measurements below were taken on the 800 × 480 VIEWE board using LVGL 9.6 with RGB565X framebuffers. They are **historical development measurements**, collected before removal of the detailed `LCD write` / `FB sync` profiling code. They are representative observations, **not** a controlled benchmark with identical scheduling, measurement windows or instrument settings.
+Measurements below were taken on the **800 × 480 VIEWE board** using LVGL 9.6 with RGB565X framebuffers. They are **historical development measurements**, collected before removal of the detailed `LCD write` / `FB sync` profiling code and before the shared 8-line / 1,280-byte DMA configuration was introduced. They are representative observations, **not** a controlled benchmark with identical scheduling, measurement windows or instrument settings, and **not** performance results for the 480 × 272 board.
 
 | Scenario | 2 FB | 3 FB |
 | --- | ---: | ---: |
@@ -257,29 +295,30 @@ No GDMA errors, recovery restarts or synchronization errors appeared in the cite
 ## 10. Constraints and maintenance notes
 
 1. **Hardware-specific design.** The ESP32-S3 LCD_CAM and GDMA register-level sequence is not a generic Zephyr RGB display abstraction.
-2. **RGB565X only.**. Other pixel formats are not implemented. Software rotation supports 0°, 90°, 180°, and 270°, selected at build time. Runtime orientation changes are not supported.
-3. **Fixed bounce/descriptor geometry.** The 10-line, 3,200-byte layout and 16-bit data path are explicitly asserted at build time; changes require recalculating EOF and prefetch behavior.
+2. **RGB565X only.** Other pixel formats are not implemented. Software rotation supports 0°, 90°, 180°, and 270°, selected at build time; runtime orientation changes are not supported.
+3. **Shared, constrained DMA geometry.** The current 8-line bounce buffers, 1,280-byte descriptor payload, and 16-bit RGB data path work for the two validated panel geometries. Compile-time assertions enforce alignment and divisibility; different resolutions may require adjusting the common layout and verifying EOF/prefetch behavior.
 4. **PSRAM bandwidth matters.** Both scanout refill and synchronization compete for external-memory bandwidth. More framebuffers do not guarantee higher FPS.
 5. **Cache and DMA memory ownership.** On initialization, framebuffer memory is zeroed and explicitly flushed; DMA descriptors are also flushed after setup. Runtime framebuffer writes use CPU `memcpy()` for normal orientation and software pixel mapping for rotated orientations. Dirty-region synchronization uses CPU `memcpy()` between PSRAM framebuffers, followed by CPU copies from FRONT to internal-SRAM bounce buffers. Revisit coherence requirements if the memory-access path or CPU-core assignment changes.
 6. **Interrupt latency matters.** `lcd_bounce_fill()` executes in the DMA callback path, so avoid expensive diagnostics or blocking operations there.
 7. **Recovery remains a fallback.** A rising `restarts` count during normal running should be investigated rather than accepted as normal behavior.
 8. **Diagnostic overhead.** Compare optimized builds with diagnostics disabled before making production performance claims. The cleaned driver retains lightweight scanout counters, not the detailed per-copy profiling used in earlier tests.
-9. **Touch is a separate subsystem.** GT911 is integrated via Zephyr input and LVGL; it is not managed by this LCD_CAM display driver. Polling/interrupt selection and touch latency are outside this driver's responsibilities.
+9. **Touch is a separate subsystem.** GT911, where present, is integrated via Zephyr input and LVGL; it is not managed by this LCD_CAM display driver. Polling/interrupt selection and touch latency are outside this driver's responsibilities.
 
 ## 11. Suggested regression checklist
 
-After modifications to buffer ownership, synchronization, DMA descriptors, or VSYNC handling:
+After modifications to buffer ownership, synchronization, DMA descriptors, panel geometry, or VSYNC handling:
 
-- Build **1 FB, 2 FB and 3 FB** with diagnostics on and off.
-- Verify screen initialization and the expected RGB565X colors.
-- Run the moving-ball test and the multi-region stress test for each applicable mode.
+- Build **1 FB, 2 FB and 3 FB** with diagnostics on and off for each target panel.
+- Verify display initialization, physical dimensions obtained from DTS, RGB timings, and expected RGB565X colors.
+- Run the moving-ball test and the multi-region stress test for each applicable mode, using layouts appropriate for the display resolution.
 - Check for tearing in 2/3 FB modes, dropped/duplicated visual regions, and incorrect final-frame content.
 - Confirm that `errors`, `restarts` and `sync_err` remain at zero during steady state.
 - With diagnostics enabled, observe `fill_max` under full animation load and compare with bounce transfer timing headroom.
 - Exercise many independent dirty rectangles to verify overflow/full-refresh fallback.
 - Test repeated initialization where applicable and inspect failure cleanup paths.
-- For the LVGL + GT911 milestone, verify press/release behavior and visual updates with the cleaned driver; this is an **integration test**, not a function of the LCD_CAM driver.
-- Verify all four display orientations (0°, 90°, 180°, 270°), including logical resolution, framebuffer synchronization, LVGL rendering and GT911 touch-coordinate mapping.
+- Verify all four display orientations (0°, 90°, 180°, 270°), including logical resolution and framebuffer synchronization.
+- Where a touchscreen is present, verify press/release behavior and coordinate mapping after rotation. **Touch validation is an integration test**, not a function of this display driver.
+- Re-run the above on both **800 × 480** and **480 × 272** after any shared DMA or presentation-path change to catch regressions.
 
 ## 12. Main implementation entry points
 
@@ -299,10 +338,4 @@ After modifications to buffer ownership, synchronization, DMA descriptors, or VS
 
 ---
 
-**Development status (26 October 2026):** Tested on physical hardware
-with LVGL animations, stress workloads and Zephyr input/GT911 interaction.
-Display rotation (0°, 90°, 180°, 270°) has been validated with
-correct rendering and touchscreen coordinate mapping.
-The LVGL + touch + display rotation integration milestone is complete.
-Portability and production qualification require additional
-target-specific validation.
+**Development status (26 October 2026):** Continuous RGB scanout is operational on both the VIEWE 800 × 480 and 480 × 272 boards using the **same driver source**. LVGL animations, stress workloads, four software display orientations, and Zephyr input/GT911 integration were previously validated on the 800 × 480 target. Bring-up on 480 × 272 is successful; the complete multi-buffer, rotation, touchscreen, and stress-test regression matrix on that target remains to be documented. Portability to additional panels and production qualification require target-specific validation.
