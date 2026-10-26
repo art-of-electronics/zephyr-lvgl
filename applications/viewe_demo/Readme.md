@@ -110,6 +110,35 @@ CONFIG_ESP32_LCD_RGB_FRAMEBUFFER_COUNT=3
 
 Framebuffers are stored in external PSRAM. The display driver uses internal-SRAM bounce buffers and GDMA for continuous RGB scanout.
 
+### Display Orientation
+
+The driver supports four display orientations, selected at build time through Kconfig.
+
+| Rotation | Logical Resolution | Configuration |
+|---|---|---|
+| 0° | 800 × 480 | `CONFIG_ESP32_LCD_RGB_ROTATION_0=y` |
+| 90° | 480 × 800 | `CONFIG_ESP32_LCD_RGB_ROTATION_90=y` |
+| 180° | 800 × 480 | `CONFIG_ESP32_LCD_RGB_ROTATION_180=y` |
+| 270° | 480 × 800 | `CONFIG_ESP32_LCD_RGB_ROTATION_270=y` |
+
+For example, to enable portrait mode:
+
+```ini
+CONFIG_ESP32_LCD_RGB_ROTATION_90=y
+```
+
+Rotation is applied in software when writing pixels to the framebuffer. The physical RGB scanout configuration remains unchanged.
+
+The driver reports the logical display resolution and orientation through the Zephyr Display API, allowing LVGL to adapt its layout accordingly.
+
+The GT911 touchscreen coordinates are automatically transformed to match the selected display orientation.
+
+**Notes:**
+- Display orientation is fixed at build time; runtime rotation is not supported.
+- All four orientations have been validated on the target hardware.
+- Software rotation may increase framebuffer write overhead, particularly in portrait mode (90° and 270°).
+- Framebuffer count and display orientation can be configured independently.
+
 ## Touchscreen
 
 The board uses a **GT911 capacitive touchscreen controller** connected through I²C.

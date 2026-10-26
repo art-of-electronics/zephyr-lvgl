@@ -54,7 +54,13 @@ choice ESP32_LCD_RGB_ROTATION
 config ESP32_LCD_RGB_ROTATION_0
     bool "0 degrees"
 
+config ESP32_LCD_RGB_ROTATION_90
+    bool "90 degrees clockwise"
+
 config ESP32_LCD_RGB_ROTATION_180
     bool "180 degrees"
+
+config ESP32_LCD_RGB_ROTATION_270
+    bool "270 degrees clockwise"
 
 endchoice
