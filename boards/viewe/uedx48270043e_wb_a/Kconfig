@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: Apache-2.0
+
+config HEAP_MEM_POOL_ADD_SIZE_BOARD
+	int
+	default 4096 if BOARD_UEDX48270043E_WB_A_ESP32S3_PROCPU
+	default 256 if BOARD_UEDX48270043E_WB_A_ESP32S3_APPCPU
+
+config ESP32_LCD_RGB_FRAMEBUFFER_COUNT
+    int "Number of LCD RGB framebuffers"
+    range 1 3
+    default 2
+    help
+      Select the number of PSRAM framebuffers.
+
+      One framebuffer reduces memory usage but may cause tearing.
+      Two framebuffers enable synchronized, tear-free presentation.
+      Three framebuffers allow rendering the next frame while a
+      completed frame is waiting for presentation, potentially
+      reducing rendering stalls at the cost of additional memory.
+
+configdefault ESP_SPIRAM_HEAP_SIZE
+    default 1048576 if ESP32_LCD_RGB_FRAMEBUFFER_COUNT = 1
+    default 2097152 if ESP32_LCD_RGB_FRAMEBUFFER_COUNT = 2
+    default 3145728 if ESP32_LCD_RGB_FRAMEBUFFER_COUNT = 3
+
+config LOG_LCD_CAM_DIAGNOSTICS
+    bool "Enable LCD_CAM RGB driver diagnostics"
+    default n
+    depends on LOG
+    help
+      Enable performance measurements and periodic diagnostic logging
+      for the ESP32-S3 LCD_CAM RGB display driver.
+
+choice GT911_TOUCHSCREEN_MODE
+    prompt "GT911 touchscreen mode"
+    depends on INPUT_GT911
+    default GT911_TOUCHSCREEN_POLL
+
+config GT911_TOUCHSCREEN_POLL
+    bool "Polling (R33 not mounted)"
+
+config GT911_TOUCHSCREEN_INT
+    bool "Interrupt (R33 mounted)"
+
+endchoice
+
+choice ESP32_LCD_RGB_ROTATION
+    prompt "LCD RGB orientation (fixed at boot)"
+    default ESP32_LCD_RGB_ROTATION_0
+    help
+      Select the display orientation at build time.
+      LCD_CAM scanout always uses the physical panel resolution.
+
+config ESP32_LCD_RGB_ROTATION_0
+    bool "0 degrees"
+
+config ESP32_LCD_RGB_ROTATION_90
+    bool "90 degrees clockwise"
+
+config ESP32_LCD_RGB_ROTATION_180
+    bool "180 degrees"
+
+config ESP32_LCD_RGB_ROTATION_270
+    bool "270 degrees clockwise"
+
+endchoice
