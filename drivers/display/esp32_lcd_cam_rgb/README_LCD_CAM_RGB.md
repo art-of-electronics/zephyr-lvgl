@@ -52,7 +52,7 @@ The **LCD timing engine runs continuously**. GDMA consumes descriptor-backed SRA
 | One DMA descriptor payload | 3,200 bytes | 3,200 B |
 | GDMA descriptor ring | 5 descriptors per bounce × 2 | 10 descriptors |
 
-Descriptor bookkeeping, synchronization state, work items, and diagnostics require additional memory. Framebuffers are allocated from the external-memory shared heap with **32-byte alignment**.
+Descriptor bookkeeping, synchronization state, work items (2 FB), and optional diagnostics require additional memory. Framebuffers are allocated from the external-memory shared heap with **32-byte alignment**.
 
 ## 2. RGB and clock configuration
 
@@ -93,7 +93,7 @@ The **prefetch boundary**, rather than an arbitrary write-completion timestamp, 
 
 ### VSYNC recovery
 
-If EOF progress is below the expected count at VSYNC, the recovery path resets the LCD FIFO, resets the GDMA TX channel, then starts a dedicated descriptor that compensates for the LCD FIFO's preserved pixels. The LCD timing engine is **not stopped** during this operation. This is an underrun recovery mechanism, not a requirement for steady-state operation.
+If EOF progress is below the expected count at VSYNC, the recovery path resets the LCD FIFO, resets the GDMA TX channel, then starts a dedicated descriptor that skips the bytes already held in the LCD FIFO. The LCD timing engine is **not stopped** during this operation. This is an underrun recovery mechanism, not a requirement for steady-state operation.
 
 ## 4. Framebuffer modes
 
@@ -124,7 +124,7 @@ The copy runs in a **workqueue**, not in the DMA EOF ISR.
 - The recycled DRAW is brought up to date by copying the necessary regions from the latest completed frame; `sync_pending` prevents writes until this finishes.
 - At a valid prefetch boundary, READY becomes FRONT.
 
-The `drops` diagnostic counts **replaced READY frames** in 3 FB mode. This does not indicate GDMA data loss.
+When diagnostics are enabled, `drops` counts **replaced READY frames** in 3 FB mode. This does not indicate GDMA data loss.
 
 ### Concurrency rules
 
@@ -141,7 +141,7 @@ The driver records **up to 16 independent dirty rectangles** for each synchroniz
 - Rectangles that overlap or touch are merged.
 - Independent regions remain separate instead of becoming one enormous bounding rectangle.
 - If the region list exceeds its capacity, `full_refresh` requests a safe full-frame synchronization rather than losing updates.
-- Copies operate row by row and flush the destination cache range.
+- Copies operate row by row using CPU `memcpy()` between PSRAM framebuffers. The current synchronization routine does **not** explicitly flush each destination range.
 - Dirty region lists are used only for 2 FB and 3 FB; no cross-framebuffer copy is needed with 1 FB.
 
 **Why this matters:** a small animated object on the left and changing text on the right can span most of the screen if represented by a single bounding box. Keeping separate regions reduces synchronization bytes substantially.
@@ -150,7 +150,7 @@ The driver records **up to 16 independent dirty rectangles** for each synchroniz
 
 The driver registers a Zephyr `DEVICE_API(display, ...)` implementing:
 
-- `write`: copies incoming RGB565X pixels to the drawing framebuffer and performs cache maintenance;
+- `write`: copies incoming RGB565X pixels to the drawing framebuffer using CPU `memcpy()`;
 - `get_capabilities`: reports resolution, format and orientation;
 - `set_pixel_format`: accepts only `PIXEL_FORMAT_RGB_565X`;
 - `set_orientation`: accepts only `DISPLAY_ORIENTATION_NORMAL`.
@@ -161,9 +161,9 @@ For each write, the implementation validates destination bounds, pitch and sourc
 
 ## 7. Build configuration
 
-The tested project uses Zephyr **4.4** and an ESP32-S3 board definition with external PSRAM enabled, LCD_CAM RGB pinctrl and GDMA TX configured in devicetree.
+The tested project uses Zephyr **4.4** and the board definition under `boards/viewe/uedx80480050e_wb_a/`, with external PSRAM enabled, LCD_CAM RGB pinctrl and GDMA TX configured in devicetree. The `boards/viewe/` directory groups VIEWE board definitions; it is not a driver requirement.
 
-Relevant Kconfig entries:
+Relevant Kconfig entries (project configuration):
 
 ```ini
 # Required project/SoC configuration must enable LCD_CAM, GDMA and PSRAM.
@@ -175,19 +175,19 @@ CONFIG_LOG=y
 CONFIG_LOG_LCD_CAM_DIAGNOSTICS=y
 ```
 
-The project's Kconfig defines `LOG_LCD_CAM_DIAGNOSTICS` as a boolean. The user's updated driver maps it to its compile switch, for example:
+The project's Kconfig defines `LOG_LCD_CAM_DIAGNOSTICS` as a boolean. The driver maps it to its compile switch:
 
 ```c
 #define LOG_PRINT (IS_ENABLED(CONFIG_LOG_LCD_CAM_DIAGNOSTICS))
 ```
 
-Set `CONFIG_LOG_LCD_CAM_DIAGNOSTICS=n` to compile out the optional performance measurement code. **Error logs remain subject to the standard Zephyr logging configuration**. Do not confuse this optional switch with `CONFIG_DISPLAY_LOG_LEVEL`: logging must still be enabled at an appropriate level for INFO records to appear.
+Set `CONFIG_LOG_LCD_CAM_DIAGNOSTICS=n` to compile out optional scanout counters and the bounce-fill timing measurement. The per-write and framebuffer-sync timing aggregators used during development have been removed from the cleaned driver. **Error logs remain subject to the standard Zephyr logging configuration**. Do not confuse this optional switch with `CONFIG_DISPLAY_LOG_LEVEL`: logging must still be enabled at an appropriate level for INFO records to appear.
 
 > **Integration note:** The Kconfig and devicetree fragments above describe the symbols used by this driver. The precise board-specific pinctrl/clock/PSRAM setup belongs to the board definition and is not reproduced here; no universally valid board overlay is implied.
 
 ## 8. Diagnostics
 
-When enabled, instrumentation reports:
+When `CONFIG_LOG_LCD_CAM_DIAGNOSTICS=y`, the **cleaned driver** reports a periodic `LCD:` status line with the following fields. Counters other than `fill_max` are cumulative since startup:
 
 | Output | Meaning |
 | --- | --- |
@@ -197,19 +197,17 @@ When enabled, instrumentation reports:
 | `restarts` | VSYNC-triggered recovery restarts. |
 | `errors` | Nonzero GDMA callback status events. |
 | `swaps` | Completed FRONT buffer presentations (not an LVGL rendering counter). |
-| `defer` | Presentation attempts deferred because the lock or required synchronization was unavailable. |
+| `defer` | In 2 FB mode: attempted presentation deferred due to pending synchronization or unavailable lock. In 3 FB mode: presentation attempt deferred due to an unavailable lock. |
 | `drops` | READY frame replacements in mailbox mode. |
-| `sync_err` | Failed 2 FB work-item submissions. |
-| `LCD write` | Time/bytes averaged over 100 `display_write()` calls. |
-| `FB sync` | Time/bytes averaged over 100 cross-buffer synchronizations; includes number of full refreshes. |
+| `sync_err` | Failed 2 FB work-item submissions (not used in 1/3 FB modes). |
 
-The periodic status line is emitted from `display_write()` once the configured reporting interval has elapsed; it is **not a hardware timer callback**. If the application stops issuing writes, periodic diagnostic lines also stop.
+The periodic status line is emitted from `display_write()` once the configured reporting interval (currently 1,000 ms) has elapsed; it is **not a hardware timer callback**. If the application stops issuing writes, periodic diagnostic lines also stop. `fill_max` is reset after each report; the other counters are not reset.
 
 The *swaps-per-second* figure inferred from consecutive `swaps` samples is the **presentation rate**, not necessarily the LVGL render-loop rate or the panel's physical refresh rate.
 
 ## 9. Measured results (development tests)
 
-Measurements below were taken on the 800 × 480 VIEWE board using LVGL 9.6 with RGB565X framebuffers. They are **representative observations**, not a controlled benchmark with identical scheduling, measurement windows or instrument settings.
+Measurements below were taken on the 800 × 480 VIEWE board using LVGL 9.6 with RGB565X framebuffers. They are **historical development measurements**, collected before removal of the detailed `LCD write` / `FB sync` profiling code. They are representative observations, **not** a controlled benchmark with identical scheduling, measurement windows or instrument settings.
 
 | Scenario | 2 FB | 3 FB |
 | --- | ---: | ---: |
@@ -231,10 +229,11 @@ No GDMA errors, recovery restarts or synchronization errors appeared in the cite
 2. **RGB565X only.** Other formats and display rotations are not implemented.
 3. **Fixed bounce/descriptor geometry.** The 10-line, 3,200-byte layout and 16-bit data path are explicitly asserted at build time; changes require recalculating EOF and prefetch behavior.
 4. **PSRAM bandwidth matters.** Both scanout refill and synchronization compete for external-memory bandwidth. More framebuffers do not guarantee higher FPS.
-5. **Cache maintenance is essential.** Framebuffer write/sync paths flush destination ranges before those pixels are used for scanout.
+5. **Cache and DMA memory ownership.** On initialization, framebuffer memory is zeroed and explicitly flushed; DMA descriptors are also flushed after setup. Runtime framebuffer writes and dirty-region synchronization use CPU `memcpy()` into PSRAM, followed by CPU copy from FRONT to internal-SRAM bounce buffers. The current driver does **not** explicitly flush PSRAM destination ranges after every runtime copy. Revisit coherence requirements if the memory-access path or CPU-core assignment changes.
 6. **Interrupt latency matters.** `lcd_bounce_fill()` executes in the DMA callback path, so avoid expensive diagnostics or blocking operations there.
 7. **Recovery remains a fallback.** A rising `restarts` count during normal running should be investigated rather than accepted as normal behavior.
-8. **Diagnostic overhead.** Compare optimized builds with diagnostics disabled before making production performance claims.
+8. **Diagnostic overhead.** Compare optimized builds with diagnostics disabled before making production performance claims. The cleaned driver retains lightweight scanout counters, not the detailed per-copy profiling used in earlier tests.
+9. **Touch is a separate subsystem.** GT911 is integrated via Zephyr input and LVGL; it is not managed by this LCD_CAM display driver. Polling/interrupt selection and touch latency are outside this driver's responsibilities.
 
 ## 11. Suggested regression checklist
 
@@ -245,9 +244,10 @@ After modifications to buffer ownership, synchronization, DMA descriptors, or VS
 - Run the moving-ball test and the multi-region stress test for each applicable mode.
 - Check for tearing in 2/3 FB modes, dropped/duplicated visual regions, and incorrect final-frame content.
 - Confirm that `errors`, `restarts` and `sync_err` remain at zero during steady state.
-- Observe `fill_max` under full animation load and compare with bounce transfer timing headroom.
+- With diagnostics enabled, observe `fill_max` under full animation load and compare with bounce transfer timing headroom.
 - Exercise many independent dirty rectangles to verify overflow/full-refresh fallback.
 - Test repeated initialization where applicable and inspect failure cleanup paths.
+- For the LVGL + GT911 milestone, verify press/release behavior and visual updates with the cleaned driver; this is an **integration test**, not a function of the LCD_CAM driver.
 
 ## 12. Main implementation entry points
 
@@ -267,4 +267,4 @@ After modifications to buffer ownership, synchronization, DMA descriptors, or VS
 
 ---
 
-**Development status:** tested on physical hardware with LVGL animations and stress workloads; suitable as a documented project driver, but portability and production qualification require additional target-specific validation.
+**Development status (26 October 2026):** tested on physical hardware with LVGL animations, stress workloads and Zephyr input/GT911 interaction. The LVGL + touch integration milestone is functionally complete, pending the final build and on-board smoke test with the cleaned driver. Portability and production qualification require additional target-specific validation.
