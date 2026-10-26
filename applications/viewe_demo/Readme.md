@@ -97,9 +97,9 @@ The application uses the custom board definitions from the project directory and
 
 ```bash
 west build -p always \
-    "$HOME/VSCodeProjects/zephyr-lvgl/applications/viewe_demo" \
-    -b uedx80480050e_wb_a@1.2.0/esp32s3/procpu \
-    -- -DBOARD_ROOT="$HOME/VSCodeProjects/zephyr-lvgl"
+"$HOME/VSCodeProjects/zephyr-lvgl/applications/viewe_demo" \
+-b uedx80480050e_wb_a@1.2.0/esp32s3/procpu \
+-- -DBOARD_ROOT="$HOME/VSCodeProjects/zephyr-lvgl"
 ```
 
 Board definition:
@@ -119,15 +119,15 @@ west boards | grep -i uedx
 Then build with the **480 × 272 board target** returned by Zephyr:
 
 ```bash
-BOARD_4872="<your-480x272-board-target>"
+BOARD_4827="<your-480x272-board-target>"
 
 west build -p always \
-    "$HOME/VSCodeProjects/zephyr-lvgl/applications/viewe_demo" \
-    -b "$BOARD_4872" \
-    -- -DBOARD_ROOT="$HOME/VSCodeProjects/zephyr-lvgl"
+"$HOME/VSCodeProjects/zephyr-lvgl/applications/viewe_demo" \
+-b uedx48270043e_wb_a@1.3.0/esp32s3/procpu \
+-- -DBOARD_ROOT="$HOME/VSCodeProjects/zephyr-lvgl"
 ```
 
-Replace `<your-480x272-board-target>` with the actual target; do not assume the PCB marking and Zephyr board identifier are identical. The application's `CMakeLists.txt` must recognize that board and select `src/main_4872.c`.
+Replace `<your-480x272-board-target>` with the actual target; do not assume the PCB marking and Zephyr board identifier are identical. The application's `CMakeLists.txt` must recognize that board and select `src/main_4827.c`.
 
 A pristine build is recommended after switching boards because CMake must select a different source file and Zephyr must regenerate devicetree-derived settings.
 
