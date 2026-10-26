@@ -43,3 +43,18 @@ config GT911_TOUCHSCREEN_INT
     bool "Interrupt (R33 mounted)"
 
 endchoice
+
+choice ESP32_LCD_RGB_ROTATION
+    prompt "LCD RGB orientation (fixed at boot)"
+    default ESP32_LCD_RGB_ROTATION_0
+    help
+      Select the display orientation at build time.
+      LCD_CAM scanout always uses the physical panel resolution.
+
+config ESP32_LCD_RGB_ROTATION_0
+    bool "0 degrees"
+
+config ESP32_LCD_RGB_ROTATION_180
+    bool "180 degrees"
+
+endchoice
