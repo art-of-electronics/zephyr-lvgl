@@ -21,13 +21,12 @@ The current implementation provides:
 - Continuous RGB display scanout using GDMA and internal-SRAM bounce buffers.
 - Framebuffers allocated in external PSRAM.
 - Single, double, and triple framebuffer configurations.
-- Synchronized framebuffer presentation and dirty-region synchronization for multi-buffer modes.
-- Board-specific display resolutions and RGB timings configured through devicetree.
-- LVGL integration through the Zephyr display subsystem.
-- GT911 capacitive touchscreen integration through the Zephyr input subsystem.
-- WS2812 RGB LED and display backlight control in the demonstration application.
-- Resolution-specific LVGL demos selected at build time.
-- Optional graphics stress test and LCD_CAM diagnostics.
+- Dirty-region synchronization between framebuffers.
+- LVGL integration with GDMA-backed RGB scanout.
+- Build-time display rotation (0°, 90°, 180°, and 270°).
+- GT911 capacitive touchscreen integration, including orientation-aware touch mapping.
+- RGB LED (WS2812) and display backlight control.
+- Demonstration application with interactive LVGL elements and animations.
 
 ## Supported Hardware
 
@@ -67,18 +66,75 @@ The `viewe_demo` CMake configuration selects **`main_8048.c`** for the 800 × 48
 
 ## Software
 
-The project is developed using:
+The project was developed and validated with:
 
-- Zephyr RTOS 4.4
-- LVGL 9.x
-- Zephyr SDK with ESP32-S3 support
+- **Zephyr RTOS 4.4.99** (development snapshot from `main`; **not** the stable `v4.4.0` release)
+- **Zephyr revision:** `434233e9751e7cca7bea82047e812bca607722d3`
+- **hal_espressif revision:** `5e3b702250c3e05de5a4cb3a53f74fc3cd8094cf` (as reported in the tested workspace)
+- **LVGL 9.6**
+- Zephyr SDK
 - West build and flash tools
+
+### Zephyr compatibility
+
+The known-working baseline is the exact Zephyr revision listed above. A standard installation following Zephyr's *Getting Started* guide may check out a different revision of `main` or a stable release.
+
+**The official Zephyr `v4.4.0` tag is not currently a supported build target.** Its ESP32-S3 pinctrl header does not define `RMT_OUT0_GPIO0`, which is referenced by the board's WS2812/RMT pin configuration; parsing the board's devicetree therefore fails. Compatibility with other Zephyr revisions has not been established.
+
+To reproduce the tested Zephyr revision in an existing West workspace, run from the workspace root (the directory containing `zephyr/`):
+
+```bash
+git -C zephyr fetch origin
+git -C zephyr switch --detach 434233e9751e7cca7bea82047e812bca607722d3
+west update
+```
+
+The detached HEAD is intentional: it pins Zephyr to the validated commit rather than a moving `main` branch. `west update` then synchronizes modules with that revision's manifest. Use a clean build after switching Zephyr revisions.
 
 ## Getting Started
 
 The `viewe_demo` application supports both VIEWE boards listed above. Select the appropriate Zephyr board target when building; the application chooses the corresponding demo source automatically.
 
-See [VIEWE LVGL Demo](applications/viewe_demo/README.md) for build, flash, display-orientation, and application configuration instructions.
+First, use the Zephyr revision specified in [Zephyr compatibility](#zephyr-compatibility). Then see [Viewe Demo](applications/viewe_demo/Readme.md) for build instructions and application details.
+
+## Display Configuration
+
+The ESP32-S3 LCD_CAM RGB driver supports three build-time framebuffer configurations:
+
+| Framebuffers | Mode | Description |
+|---|---|---|
+| 1 | Single buffering | Minimum memory usage; tearing possible |
+| 2 | Double buffering | Synchronized front/back presentation |
+| 3 | Triple buffering | Front/ready/draw buffers with mailbox presentation |
+
+Select the framebuffer count with:
+
+```ini
+CONFIG_ESP32_LCD_RGB_FRAMEBUFFER_COUNT=3
+```
+
+Framebuffers reside in external PSRAM. The driver uses internal-SRAM bounce buffers and GDMA for continuous RGB scanout.
+
+### Display orientation
+
+The driver supports four orientations selected at build time:
+
+| Rotation | Logical resolution | Configuration |
+|---|---|---|
+| 0° | 800 × 480 | `CONFIG_ESP32_LCD_RGB_ROTATION_0=y` |
+| 90° | 480 × 800 | `CONFIG_ESP32_LCD_RGB_ROTATION_90=y` |
+| 180° | 800 × 480 | `CONFIG_ESP32_LCD_RGB_ROTATION_180=y` |
+| 270° | 480 × 800 | `CONFIG_ESP32_LCD_RGB_ROTATION_270=y` |
+
+For example, to select portrait orientation:
+
+```ini
+CONFIG_ESP32_LCD_RGB_ROTATION_90=y
+```
+
+Rotation is performed in software while writing pixels to the framebuffer. Physical LCD_CAM/GDMA scanout remains at 800 × 480. The Zephyr Display API reports the selected logical resolution and orientation, allowing LVGL and GT911 touch input to operate in the correct coordinate system.
+
+Runtime orientation changes are not supported. Framebuffer count and orientation can be configured independently. All four orientations have been validated on the target board.
 
 ## Implementation Notes
 
@@ -94,20 +150,18 @@ The driver targets the ESP32-S3 LCD_CAM peripheral and is **not a generic displa
 
 ## Project Status
 
-**Working prototype — validated on two physical display boards.**
+**v1.0.0 — initial stable release; hardware validated on the supported board.**
 
-Current milestones:
+Completed milestones include:
 
-- LCD_CAM RGB display initialization and continuous scanout on both resolutions.
-- Shared GDMA and bounce-buffer configuration.
-- LVGL rendering using board-specific demos.
-- GT911 touchscreen integration.
-- Interactive GUI elements and animations.
-- Framebuffer synchronization and diagnostic support.
+- LCD_CAM RGB display initialization and continuous GDMA scanout.
+- Single, double, and triple buffering with dirty-region synchronization.
+- LVGL rendering, interactive elements, and animations.
+- GT911 touchscreen input.
+- Display rotation in all four orientations with corresponding touch mapping.
+- Project and driver documentation.
 
-The 800 × 480 board has undergone more extensive development testing, including display rotations and multi-buffer stress workloads. The 480 × 272 board is operational, but equivalent full regression testing is still pending.
-
-Further development may include additional boards, panel configurations, and demonstration applications.
+Further development may include additional boards, display controllers, and demonstration applications. Portability to other Zephyr revisions and hardware targets requires separate validation.
 
 ---
 
