@@ -78,7 +78,7 @@ west boards | grep -i uedx
 Use the registered **480 × 272** target in the build command:
 
 ```bash
-BOARD_4872="<your-480x272-board-target>"
+BOARD_4827="<your-480x272-board-target>"
 
 west build -p always \
 "$HOME/VSCodeProjects/zephyr-lvgl/applications/viewe_demo" \
