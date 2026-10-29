@@ -40,7 +40,7 @@ CMake compiles only the entry point associated with the selected board, not both
 
 ## Prerequisites
 
-Set up the Zephyr SDK, West, and Python environment following the official Zephyr instructions. **Use the exact tested Zephyr revision**, not the stable `v4.4.0` tag; see [Zephyr compatibility](../../README.md#zephyr-compatibility) in the project README for the commit and module synchronization commands.
+Set up the Zephyr SDK, West, and Python environment following the official Zephyr instructions. Use the official Zephyr `v4.5.0` release; see [Zephyr compatibility](../../README.md#zephyr-compatibility) in the project README for the commit and module synchronization commands.
 
 The examples below assume:
 
@@ -50,6 +50,7 @@ The examples below assume:
 Activate your existing environment and enter the workspace:
 
 ```bash
+python3 -m venv ~/zephyrproject/.venv
 source ~/zephyrproject/.venv/bin/activate
 cd ~/zephyrproject
 ```
@@ -82,7 +83,7 @@ BOARD_4827="<your-480x272-board-target>"
 
 west build -p always \
 "$HOME/VSCodeProjects/zephyr-lvgl/applications/viewe_demo" \
--b "$BOARD_4872" \
+-b uedx48270043e_wb_a@1.3.0/esp32s3/procpu \
 -- -DBOARD_ROOT="$HOME/VSCodeProjects/zephyr-lvgl"
 ```
 

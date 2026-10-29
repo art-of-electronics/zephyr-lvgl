@@ -72,8 +72,8 @@ static void create_clickme(lv_obj_t *screen)
 	} else {
 		lv_obj_align(button, LV_ALIGN_TOP_RIGHT, -20, 20);
 	}
-	lv_obj_remove_flag(button, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
+	lv_obj_set_scrollable(button, false);
+	lv_obj_set_clickable(button, true);
 
 	lv_obj_set_style_bg_color(button, lv_color_hex(SAMUS_ORANGE), LV_PART_MAIN);
 	lv_obj_set_style_bg_color(button, lv_color_hex(DARK_SAMUS_ARMOR), LV_PART_MAIN | LV_STATE_PRESSED);
