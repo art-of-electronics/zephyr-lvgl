@@ -8,6 +8,9 @@
 #include <espressif/partitions_0x1000_amp.dtsi>
 #include "esp32_035-pinctrl.dtsi"
 #include <zephyr/dt-bindings/pwm/pwm.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/spi/spi.h>
+#include <zephyr/dt-bindings/mipi_dbi/mipi_dbi.h>
 
 / {
     model = "CYD ESP32-035 PROCPU";
@@ -19,6 +22,7 @@
         zephyr,shell-uart = &uart0;
         zephyr,flash = &flash0;
         zephyr,code-partition = &slot0_partition;
+        zephyr,display = &lcd;
     };
 
     aliases {
@@ -53,6 +57,51 @@
             pwms = <&ledc0 3 PWM_HZ(5000) PWM_POLARITY_NORMAL>;
         };
     };
+
+    mipi_dbi {
+        compatible = "zephyr,mipi-dbi-spi";
+
+        spi-dev = <&spi2>;
+        dc-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+
+        write-only;
+        xfr-min-bits = "MIPI_DBI_SPI_XFR_8BIT";
+
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        lcd: st7796s@0 {
+            compatible = "sitronix,st7796s";
+
+            reg = <0>;
+
+            mipi-max-frequency = <20000000>;
+            mipi-mode = "MIPI_DBI_MODE_SPI_4WIRE";
+
+            width = <320>;
+            height = <480>;
+
+            frmctl1 = [80 10];
+
+            bpc = [1f 50 00 20];
+            dfc = [8a 07 3b];
+
+            pwr1 = [80 64];
+            pwr2 = <0x13>;
+            pwr3 = <0xa7>;
+
+            vcmpctl = <0x09>;
+
+            doca = [40 8a 00 00 29 19 a5 33];
+
+            pgc = [f0 06 0b 07 06 05 2e 33 47 3a 17 16 2e 31];
+            ngc = [f0 09 0d 09 08 23 2e 33 46 38 13 13 2c 32];
+
+            madctl = <0x48>;
+
+            color-invert;
+        };
+    };
 };
 
 &flash0 {
@@ -65,6 +114,18 @@
     current-speed = <115200>;
     pinctrl-0 = <&uart0_default>;
     pinctrl-names = "default";
+};
+
+&spi2 {
+    status = "okay";
+
+    pinctrl-0 = <&spim2_default>;
+    pinctrl-names = "default";
+
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    cs-gpios = <&gpio0 15 GPIO_ACTIVE_LOW>;
 };
 
 &gpio0 {
