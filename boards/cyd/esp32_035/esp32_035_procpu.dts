@@ -1,0 +1,128 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/dts-v1/;
+
+#include <espressif/esp32/esp32.dtsi>
+#include <espressif/partitions_0x1000_amp.dtsi>
+#include "esp32_035-pinctrl.dtsi"
+#include <zephyr/dt-bindings/pwm/pwm.h>
+
+/ {
+    model = "CYD ESP32-035 PROCPU";
+    compatible = "cyd,esp32-035", "espressif,esp32";
+
+    chosen {
+        zephyr,sram = &sram1;
+        zephyr,console = &uart0;
+        zephyr,shell-uart = &uart0;
+        zephyr,flash = &flash0;
+        zephyr,code-partition = &slot0_partition;
+    };
+
+    aliases {
+        uart-0 = &uart0;
+        watchdog0 = &wdt0;
+        led0 = &led_red;
+        led1 = &led_green;
+        led2 = &led_blue;
+        backlight = &lcd_backlight;
+    };
+
+    pwmleds {
+        compatible = "pwm-leds";
+
+        led_red: led_red {
+            label = "CYD RGB Red";
+            pwms = <&ledc0 0 PWM_HZ(5000) PWM_POLARITY_INVERTED>;
+        };
+
+        led_green: led_green {
+            label = "CYD RGB Green";
+            pwms = <&ledc0 1 PWM_HZ(5000) PWM_POLARITY_INVERTED>;
+        };
+
+        led_blue: led_blue {
+            label = "CYD RGB Blue";
+            pwms = <&ledc0 2 PWM_HZ(5000) PWM_POLARITY_INVERTED>;
+        };
+
+        lcd_backlight: lcd_backlight {
+            label = "CYD LCD Backlight";
+            pwms = <&ledc0 3 PWM_HZ(5000) PWM_POLARITY_NORMAL>;
+        };
+    };
+};
+
+&flash0 {
+    reg = <0x0 DT_SIZE_M(4)>;
+    ranges = <0x0 0x0 DT_SIZE_M(4)>;
+};
+
+&uart0 {
+    status = "okay";
+    current-speed = <115200>;
+    pinctrl-0 = <&uart0_default>;
+    pinctrl-names = "default";
+};
+
+&gpio0 {
+    gpio-reserved-ranges = <6 6>, <20 1>, <24 1>, <28 4>;
+    status = "okay";
+};
+
+&gpio1 {
+    gpio-reserved-ranges = <5 2>;
+    status = "okay";
+};
+
+&timer0 {
+    status = "disabled";
+};
+
+&timer1 {
+    status = "disabled";
+};
+
+&timer2 {
+    status = "disabled";
+};
+
+&timer3 {
+    status = "disabled";
+};
+
+&trng0 {
+    status = "okay";
+};
+
+&ledc0 {
+    status = "okay";
+
+    pinctrl-0 = <&ledc0_default>;
+    pinctrl-names = "default";
+
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    channel0@0 {
+        reg = <0>;
+        timer = <0>;
+    };
+
+    channel1@1 {
+        reg = <1>;
+        timer = <0>;
+    };
+
+    channel2@2 {
+        reg = <2>;
+        timer = <0>;
+    };
+
+    channel3@3 {
+        reg = <3>;
+        timer = <0>;
+    };
+};

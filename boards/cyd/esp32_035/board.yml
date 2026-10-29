@@ -1,0 +1,6 @@
+board:
+  name: esp32_035
+  full_name: CYD ESP32-035
+  vendor: cyd
+  socs:
+    - name: esp32
