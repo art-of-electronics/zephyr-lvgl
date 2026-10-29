@@ -68,28 +68,28 @@ The `viewe_demo` CMake configuration selects **`main_8048.c`** for the 800 × 48
 
 The project was developed and validated with:
 
-- **Zephyr RTOS 4.4.99** (development snapshot from `main`; **not** the stable `v4.4.0` release)
-- **Zephyr revision:** `434233e9751e7cca7bea82047e812bca607722d3`
-- **hal_espressif revision:** `5e3b702250c3e05de5a4cb3a53f74fc3cd8094cf` (as reported in the tested workspace)
+- **Zephyr RTOS 4.5.0** (official stable release, tag `v4.5.0`)
+- **Zephyr revision:** `41d10b59730406bbab4ca9f1fbbe9e96aafb4966`
+- **hal_espressif revision:** `cc81db00233af6020f2fea9fbb0d0098fb3d0d86` (as reported in the tested workspace)
 - **LVGL 9.6**
 - Zephyr SDK
 - West build and flash tools
 
 ### Zephyr compatibility
 
-The known-working baseline is the exact Zephyr revision listed above. A standard installation following Zephyr's *Getting Started* guide may check out a different revision of `main` or a stable release.
+The project has been built and validated on physical hardware using the official **Zephyr RTOS v4.5.0** release.
 
-**The official Zephyr `v4.4.0` tag is not currently a supported build target.** Its ESP32-S3 pinctrl header does not define `RMT_OUT0_GPIO0`, which is referenced by the board's WS2812/RMT pin configuration; parsing the board's devicetree therefore fails. Compatibility with other Zephyr revisions has not been established.
+The tested Zephyr revision and hal_espressif revision are listed above. Both supported VIEWE display boards have been verified with this release.
 
-To reproduce the tested Zephyr revision in an existing West workspace, run from the workspace root (the directory containing `zephyr/`):
+To reproduce the tested environment, run the following commands from the root of an existing West workspace:
 
 ```bash
 git -C zephyr fetch origin
-git -C zephyr switch --detach 434233e9751e7cca7bea82047e812bca607722d3
+git -C zephyr switch --detach v4.5.0
 west update
 ```
 
-The detached HEAD is intentional: it pins Zephyr to the validated commit rather than a moving `main` branch. `west update` then synchronizes modules with that revision's manifest. Use a clean build after switching Zephyr revisions.
+The `west update` command synchronizes Zephyr modules with the revisions specified by the v4.5.0 manifest.
 
 ## Getting Started
 
