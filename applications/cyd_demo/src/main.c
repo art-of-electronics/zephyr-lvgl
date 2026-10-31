@@ -2,292 +2,113 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <demo_rgb.h>
+#include <demo_lcd.h>
+
 #include <zephyr/kernel.h>
-#include <zephyr/device.h>
-#include <zephyr/drivers/pwm.h>
-#include <zephyr/drivers/display.h>
-#include <zephyr/drivers/mipi_dbi.h>
-#include <zephyr/sys/byteorder.h>
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(cyd_demo, LOG_LEVEL_INF);
 
-#define LED_RED_NODE        DT_ALIAS(led0)
-#define LED_GREEN_NODE      DT_ALIAS(led1)
-#define LED_BLUE_NODE       DT_ALIAS(led2)
-#define LCD_BACKLIGHT_NODE  DT_ALIAS(backlight)
-#define LCD_NODE            DT_CHOSEN(zephyr_display)
+static struct k_thread demo_rgb_thread_data = {0};
+static struct k_thread demo_lcd_thread_data = {0};
 
-#define PWM_MAX_BRIGHTNESS  (100U)
-#define PWM_STEP_DELAY_MS   (20U)
-#define PWM_COLOR_STEPS     (100U)
-#define PWM_BACKLIGHT_MIN   (10U)
+K_THREAD_STACK_DEFINE(demo_rgb_stack, THREAD_DEMO_RGB_STACK_SIZE);
+K_THREAD_STACK_DEFINE(demo_lcd_stack, THREAD_DEMO_LCD_STACK_SIZE);
 
-#define LCD_WIDTH           (320U)
-#define LCD_HEIGHT          (480U)
-#define LCD_BUFFER_ROWS     (8U)
+static void demo_rgb_task(void *arg1, void*arg2, void *arg3) {
+    (void)arg1;
+    (void)arg2;
+    (void)arg3;
 
-#define LCD_CMD_COLMOD      (0x3AU)
-#define LCD_CMD_MADCTL      (0x36U)
-#define LCD_COLMOD_RGB565   (0x55U)
-#define LCD_MADCTL_VALUE    (0x48U)
-
-#define SAMUS_ORANGE        (0xF465U)
-#define SAMUS_RED           (0xD145U)
-#define SAMUS_BLUE          (0x245BU)
-#define SAMUS_GREEN         (0x564FU)
-#define SAMUS_PURPLE        (0x8238U)
-#define DARK_SAMUS_BLUE     (0x067FU)
-#define DARK_SAMUS_ARMOR    (0x114BU)
-
-#define LCD_RED     (0xF800U)
-#define LCD_GREEN   (0x07E0U)
-#define LCD_BLUE    (0x001FU)
-#define LCD_WHITE   (0xFFFFU)
-#define LCD_BLACK   (0x0000U)
-
-static uint16_t lcd_buffer[LCD_WIDTH * LCD_BUFFER_ROWS];
-
-
-static const struct device *const lcd_dbi = DEVICE_DT_GET(DT_PARENT(LCD_NODE));
-
-static const struct pwm_dt_spec led_red = PWM_DT_SPEC_GET(LED_RED_NODE);
-static const struct pwm_dt_spec led_green = PWM_DT_SPEC_GET(LED_GREEN_NODE);
-static const struct pwm_dt_spec led_blue = PWM_DT_SPEC_GET(LED_BLUE_NODE);
-static const struct pwm_dt_spec lcd_backlight = PWM_DT_SPEC_GET(LCD_BACKLIGHT_NODE);
-static const struct mipi_dbi_config lcd_dbi_config = MIPI_DBI_CONFIG_DT(LCD_NODE, SPI_OP_MODE_CONTROLLER | SPI_WORD_SET(8), 0);
-
-static int pwm_set_brightness(const struct pwm_dt_spec *pwm, uint32_t brightness)
-{
-    uint64_t pulse = 0U;
-
-    if (PWM_MAX_BRIGHTNESS < brightness) {
-        return -EINVAL;
-    }
-
-    pulse = ((uint64_t)pwm->period * brightness) / PWM_MAX_BRIGHTNESS;
-
-    return pwm_set_dt(pwm, pwm->period, (uint32_t)pulse);
-}
-
-static int pwm_init(void)
-{
-    if ((true != pwm_is_ready_dt(&led_red)) ||
-        (true != pwm_is_ready_dt(&led_green)) ||
-        (true != pwm_is_ready_dt(&led_blue)) ||
-        (true != pwm_is_ready_dt(&lcd_backlight))) {
-        LOG_ERR("PWM controller not ready");
-        return -ENODEV;
-    }
-
-    return 0;
-}
-
-static int pwm_set_rgb(uint32_t red, uint32_t green, uint32_t blue)
-{
     int ret = 0;
 
-    ret = pwm_set_brightness(&led_red, red);
+    ret = demo_rgb_init();
     if (0 != ret) {
-        return ret;
+        LOG_ERR("RGB Led init() fail %d", ret);
+        return;
     }
 
-    ret = pwm_set_brightness(&led_green, green);
+    ret = demo_rgb_set_rgb(0U, 0U, 0U);
     if (0 != ret) {
-        return ret;
+        LOG_ERR("RGB Led set_rgb() fail %d", ret);
+        return;
     }
 
-    return pwm_set_brightness(&led_blue, blue);
-    if (0 != ret) {
-        return ret;
+    while (1) {
+        demo_rgb_loop();
     }
 }
 
-static int lcd_configure_test(void)
-{
-    const uint8_t colmod = LCD_COLMOD_RGB565;
-    const uint8_t madctl = LCD_MADCTL_VALUE;
+static void demo_lcd_task(void *arg1, void*arg2, void *arg3) {
+    (void)arg1;
+    (void)arg2;
+    (void)arg3;
+
     int ret = 0;
 
-    if (true != device_is_ready(lcd_dbi)) {
-        return -ENODEV;
-    }
-
-    ret = mipi_dbi_command_write(
-        lcd_dbi,
-        &lcd_dbi_config,
-        LCD_CMD_COLMOD,
-        &colmod,
-        sizeof(colmod)
-    );
-
+    ret = demo_lcd_pwm_init();
     if (0 != ret) {
-        return ret;
+        LOG_ERR("LCD pwm_init() fail %d", ret);
+        return;
     }
 
-    ret = mipi_dbi_command_write(
-        lcd_dbi,
-        &lcd_dbi_config,
-        LCD_CMD_MADCTL,
-        &madctl,
-        sizeof(madctl)
-    );
+    ret = demo_lcd_set_brightness(35U);
+    if (0 != ret) {
+        LOG_ERR("LCD set_brightness() fail %d", ret);
+        return;
+    }
 
-    return ret;
+    ret = demo_lcd_init_lcd();
+    if (0 != ret) {
+        LOG_ERR("LCD init() fail %d", ret);
+        return;
+    }
+
+    while (1) {
+        demo_lcd_loop();
+    }
 }
 
-static int lcd_fill(const struct device *display, uint16_t color)
-{
-    struct display_buffer_descriptor desc = {0};
-    uint32_t i = 0U;
-    uint16_t y = 0U;
-    int ret = 0;
-/*
-    for (i = 0U; i < ARRAY_SIZE(lcd_buffer); i++) {
-        lcd_buffer[i] = color;
-    }
-*/
-    for (i = 0U; i < ARRAY_SIZE(lcd_buffer); i++) {
-        lcd_buffer[i] = sys_cpu_to_be16(color);
-    }
+int demo_rgb_start(void) {
+	k_tid_t tid;
 
-    desc.width = LCD_WIDTH;
-    desc.height = LCD_BUFFER_ROWS;
-    desc.pitch = LCD_WIDTH;
-    desc.buf_size = sizeof(lcd_buffer);
+	tid = k_thread_create(&demo_rgb_thread_data, demo_rgb_stack,
+			              K_THREAD_STACK_SIZEOF(demo_rgb_stack), demo_rgb_task, 
+                          NULL, NULL, NULL, THREAD_DEMO_RGB_PRIORITY, 0, K_NO_WAIT);
 
-    for (y = 0U; y < LCD_HEIGHT; y += LCD_BUFFER_ROWS) {
-        ret = display_write(display, 0U, y, &desc, lcd_buffer);
-        if (0 != ret) {
-            return ret;
-        }
-    }
+	if (NULL == tid) {
+		return -EIO;
+	}
 
-    return 0;
+	k_thread_name_set(tid, "demo_rgb");
+
+	return 0;
 }
+
+int demo_lcd_start(void) {
+	k_tid_t tid;
+
+	tid = k_thread_create(&demo_lcd_thread_data, demo_lcd_stack,
+			              K_THREAD_STACK_SIZEOF(demo_lcd_stack), demo_lcd_task, 
+                          NULL, NULL, NULL, THREAD_DEMO_LCD_PRIORITY, 0, K_NO_WAIT);
+
+	if (NULL == tid) {
+		return -EIO;
+	}
+
+	k_thread_name_set(tid, "demo_lcd");
+
+	return 0;
+}
+
 
 int main(void)
 {
-    int ret = 0;
-    uint32_t step = 0U;
-
-    ret = pwm_init();
-
-    if (0 != ret) {
-        return ret;
-    }
-
-    LOG_INF("CYD ESP32-035 PWM demo started");
-
-    ret = pwm_set_brightness(&lcd_backlight, 35U);
-    if (0 != ret) {
-        LOG_ERR("Backlight PWM failed: %d", ret);
-        return ret;
-    }
-
-    ret = pwm_set_rgb(0U, 0U, 0U);
-    if (0 != ret) {
-        LOG_ERR("RGB PWM failed: %d", ret);
-        return ret;
-    }
-
-    const struct device *display = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
-    struct display_capabilities capabilities = {0};
-    if (true != device_is_ready(display)) {
-        LOG_ERR("Display device not ready");
-        return -ENODEV;
-    }
-
-    display_get_capabilities(display, &capabilities);
-
-    LOG_INF("Display device: %s", display->name);
-    LOG_INF("Display: %u x %u", capabilities.x_resolution, capabilities.y_resolution);
-    LOG_INF("Pixel format: 0x%x", capabilities.current_pixel_format);
-
-    if (PIXEL_FORMAT_RGB_565 != capabilities.current_pixel_format) {
-        ret = display_set_pixel_format(display, PIXEL_FORMAT_RGB_565);
-        if (0 != ret) {
-            LOG_ERR("Cannot set RGB565: %d", ret);
-            return ret;
-        }
-    }
-
-    ret = display_blanking_off(display);
-    if (0 != ret) {
-        LOG_ERR("Display blanking off failed: %d", ret);
-        return ret;
-    }
-
-    ret = lcd_configure_test();
-    if (0 != ret) {
-        LOG_ERR("LCD configuration failed: %d", ret);
-        return ret;
-    }
+    (void)demo_rgb_start();
+    (void)demo_lcd_start();
 
     while (true) {
-        ret = lcd_fill(display, LCD_RED);
-        if (0 != ret) {
-            LOG_ERR("Display write failed: %d", ret);
-            return ret;
-        }
-        k_msleep(1000);
-
-        ret = lcd_fill(display, LCD_GREEN);
-        if (0 != ret) {
-            return ret;
-        }
-        k_msleep(1000);
-
-        ret = lcd_fill(display, LCD_BLUE);
-        if (0 != ret) {
-            return ret;
-        }
-        k_msleep(1000);
-
-        ret = lcd_fill(display, LCD_WHITE);
-        if (0 != ret) {
-            return ret;
-        }
-        k_msleep(1000);
-
-        ret = lcd_fill(display, LCD_BLACK);
-        if (0 != ret) {
-            return ret;
-        }
-        k_msleep(1000);
+        k_sleep(K_SECONDS(1));
     }
-/*        
-        for (step = 0U; step <= PWM_COLOR_STEPS; step++) {
-            ret = pwm_set_rgb(PWM_COLOR_STEPS - step, step, 0U);
-            if (0 != ret) {
-                LOG_ERR("RGB PWM failed: %d", ret);
-                return ret;
-            }
-
-            k_msleep(PWM_STEP_DELAY_MS);
-        }
-
-        for (step = 0U; step <= PWM_COLOR_STEPS; step++) {
-            ret = pwm_set_rgb(0U, PWM_COLOR_STEPS - step, step);
-            if (0 != ret) {
-                LOG_ERR("RGB PWM failed: %d", ret);
-                return ret;
-            }
-
-            k_msleep(PWM_STEP_DELAY_MS);
-        }
-
-        for (step = 0U; step <= PWM_COLOR_STEPS; step++) {
-            ret = pwm_set_rgb(step, 0U, PWM_COLOR_STEPS - step);
-
-            if (0 != ret) {
-                LOG_ERR("RGB PWM failed: %d", ret);
-                return ret;
-            }
-
-            k_msleep(PWM_STEP_DELAY_MS);
-        }
-    }
-*/
-    // return 0;
 }
