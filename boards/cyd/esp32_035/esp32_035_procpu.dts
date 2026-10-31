@@ -123,7 +123,37 @@
     #address-cells = <1>;
     #size-cells = <0>;
 
-    cs-gpios = <&gpio0 15 GPIO_ACTIVE_LOW>;
+    cs-gpios = <&gpio0 15 GPIO_ACTIVE_LOW>,
+               <&gpio1 1 GPIO_ACTIVE_LOW>;
+
+    touchscreen: xpt2046@1 {
+        compatible = "xptek,xpt2046";
+        reg = <1>;
+
+        spi-max-frequency = <2000000>;
+
+        int-gpios = <&gpio1 4 GPIO_ACTIVE_LOW>;
+
+        touchscreen-size-x = <480>;
+        touchscreen-size-y = <320>;
+
+        screen-width = <480>;
+        screen-height = <320>;
+
+        min-x = <600>;
+        max-x = <3750>;
+
+        min-y = <300>;
+        max-y = <3800>;
+
+        swapped-x-y;
+        inverted-y;
+
+        z-threshold = <100>;
+        reads = <5>;
+
+        status = "okay";
+    };
 };
 
 &gpio0 {
