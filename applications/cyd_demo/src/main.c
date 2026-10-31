@@ -4,6 +4,7 @@
 
 #include <demo_rgb.h>
 #include <demo_lcd.h>
+#include <demo_touch.h>
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -62,6 +63,12 @@ static void demo_lcd_task(void *arg1, void*arg2, void *arg3) {
     ret = demo_lcd_init_lcd();
     if (0 != ret) {
         LOG_ERR("LCD init() fail %d", ret);
+        return;
+    }
+
+    ret = demo_touch_init();
+    if (0 != ret) {
+        LOG_ERR("Touch init() fail %d", ret);
         return;
     }
 
