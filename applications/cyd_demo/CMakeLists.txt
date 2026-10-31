@@ -9,7 +9,11 @@ project(cyd_demo)
 
 target_include_directories(app PRIVATE src)
 
-target_sources(app PRIVATE src/main.c)
+target_sources(app PRIVATE 
+    src/main.c
+    src/demo_rgb.c
+    src/demo_lcd.c
+)
 
 set(external_project_cflags
     "${includes} ${definitions} ${options} ${system_includes} -DDISABLE_AUTOMATIC_FW_UPDATE"

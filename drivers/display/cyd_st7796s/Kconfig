@@ -1,0 +1,6 @@
+config CYD_ST7796S_PANEL_INIT
+    bool "CYD ST7796S panel initialization"
+    depends on ST7796S
+    help
+      Enable CYD-specific ST7796S panel configuration
+      using the existing Zephyr MIPI DBI interface.
