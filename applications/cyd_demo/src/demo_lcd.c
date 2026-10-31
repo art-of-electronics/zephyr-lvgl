@@ -1,17 +1,16 @@
 #include <demo_lcd.h>
+#include <cyd_st7796s.h>
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/pwm.h>
 #include <zephyr/drivers/display.h>
-#include <zephyr/drivers/mipi_dbi.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(demo_lcd, LOG_LEVEL_INF);
 
 #define LCD_BACKLIGHT_NODE  DT_ALIAS(backlight)
-#define LCD_NODE            DT_CHOSEN(zephyr_display)
 
 #define PWM_BACKLIGHT_MIN   (10U)
 #define PWM_MAX_BRIGHTNESS  (100U)
@@ -19,11 +18,6 @@ LOG_MODULE_REGISTER(demo_lcd, LOG_LEVEL_INF);
 #define LCD_WIDTH           (320U)
 #define LCD_HEIGHT          (480U)
 #define LCD_BUFFER_ROWS     (8U)
-
-#define LCD_CMD_COLMOD      (0x3AU)
-#define LCD_CMD_MADCTL      (0x36U)
-#define LCD_COLMOD_RGB565   (0x55U)
-#define LCD_MADCTL_VALUE    (0x48U)
 
 #define SAMUS_ORANGE        (0xF465U)
 #define SAMUS_RED           (0xD145U)
@@ -41,9 +35,7 @@ LOG_MODULE_REGISTER(demo_lcd, LOG_LEVEL_INF);
 
 static uint16_t lcd_buffer[LCD_WIDTH * LCD_BUFFER_ROWS];
 
-static const struct device *const lcd_dbi = DEVICE_DT_GET(DT_PARENT(LCD_NODE));
 static const struct pwm_dt_spec lcd_backlight = PWM_DT_SPEC_GET(LCD_BACKLIGHT_NODE);
-static const struct mipi_dbi_config lcd_dbi_config = MIPI_DBI_CONFIG_DT(LCD_NODE, SPI_OP_MODE_CONTROLLER | SPI_WORD_SET(8), 0);
 static const struct device *display = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
 
 static int pwm_set_brightness(const struct pwm_dt_spec *pwm, uint32_t brightness)
@@ -57,39 +49,6 @@ static int pwm_set_brightness(const struct pwm_dt_spec *pwm, uint32_t brightness
     pulse = ((uint64_t)pwm->period * brightness) / PWM_MAX_BRIGHTNESS;
 
     return pwm_set_dt(pwm, pwm->period, (uint32_t)pulse);
-}
-
-static int lcd_configure_test(void)
-{
-    const uint8_t colmod = LCD_COLMOD_RGB565;
-    const uint8_t madctl = LCD_MADCTL_VALUE;
-    int ret = 0;
-
-    if (true != device_is_ready(lcd_dbi)) {
-        return -ENODEV;
-    }
-
-    ret = mipi_dbi_command_write(
-        lcd_dbi,
-        &lcd_dbi_config,
-        LCD_CMD_COLMOD,
-        &colmod,
-        sizeof(colmod)
-    );
-
-    if (0 != ret) {
-        return ret;
-    }
-
-    ret = mipi_dbi_command_write(
-        lcd_dbi,
-        &lcd_dbi_config,
-        LCD_CMD_MADCTL,
-        &madctl,
-        sizeof(madctl)
-    );
-
-    return ret;
 }
 
 static int lcd_fill(const struct device *display, uint16_t color)
@@ -163,15 +122,15 @@ int demo_lcd_init_lcd(void)
         }
     }
 
-    ret = display_blanking_off(display);
+    ret = cyd_st7796s_configure();
     if (0 != ret) {
-        LOG_ERR("Display blanking off failed: %d", ret);
+        LOG_ERR("LCD configuration failed: %d", ret);
         return ret;
     }
 
-    ret = lcd_configure_test();
+    ret = display_blanking_off(display);
     if (0 != ret) {
-        LOG_ERR("LCD configuration failed: %d", ret);
+        LOG_ERR("Display blanking off failed: %d", ret);
         return ret;
     }
 
