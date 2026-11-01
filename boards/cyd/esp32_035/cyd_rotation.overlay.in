@@ -7,25 +7,21 @@
 &lcd {
 
 #if CYD_LCD_ROTATION == 0
-
     width = <320>;
     height = <480>;
     madctl = <0x48>;
 
 #elif CYD_LCD_ROTATION == 90
-
     width = <480>;
     height = <320>;
     madctl = <0x28>;
 
 #elif CYD_LCD_ROTATION == 180
-
     width = <320>;
     height = <480>;
     madctl = <0x88>;
 
 #elif CYD_LCD_ROTATION == 270
-
     width = <480>;
     height = <320>;
     madctl = <0xE8>;
@@ -56,21 +52,17 @@
     /delete-property/ inverted-y;
 
 #if CYD_LCD_ROTATION == 0
-
     inverted-x;
     inverted-y;
 
 #elif CYD_LCD_ROTATION == 90
-
     swapped-x-y;
     inverted-y;
 
 #elif CYD_LCD_ROTATION == 180
-
     /* No inversion required. */
 
 #elif CYD_LCD_ROTATION == 270
-
     swapped-x-y;
     inverted-x;
 
