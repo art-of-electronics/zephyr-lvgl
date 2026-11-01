@@ -1,0 +1,238 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/dts-v1/;
+
+#include <espressif/esp32/esp32.dtsi>
+#include <espressif/partitions_0x1000_amp.dtsi>
+#include "esp32_035-pinctrl.dtsi"
+#include <zephyr/dt-bindings/pwm/pwm.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/spi/spi.h>
+#include <zephyr/dt-bindings/mipi_dbi/mipi_dbi.h>
+
+/ {
+    model = "CYD ESP32-035 PROCPU";
+    compatible = "cyd,esp32-035", "espressif,esp32";
+
+    chosen {
+        zephyr,sram = &sram1;
+        zephyr,console = &uart0;
+        zephyr,shell-uart = &uart0;
+        zephyr,flash = &flash0;
+        zephyr,code-partition = &slot0_partition;
+        zephyr,display = &lcd;
+        zephyr,touch = &touchscreen;
+    };
+
+    aliases {
+        uart-0 = &uart0;
+        watchdog0 = &wdt0;
+        led0 = &led_red;
+        led1 = &led_green;
+        led2 = &led_blue;
+        backlight = &lcd_backlight;
+    };
+
+    pwmleds {
+        compatible = "pwm-leds";
+
+        led_red: led_red {
+            label = "CYD RGB Red";
+            pwms = <&ledc0 0 PWM_HZ(5000) PWM_POLARITY_INVERTED>;
+        };
+
+        led_green: led_green {
+            label = "CYD RGB Green";
+            pwms = <&ledc0 1 PWM_HZ(5000) PWM_POLARITY_INVERTED>;
+        };
+
+        led_blue: led_blue {
+            label = "CYD RGB Blue";
+            pwms = <&ledc0 2 PWM_HZ(5000) PWM_POLARITY_INVERTED>;
+        };
+
+        lcd_backlight: lcd_backlight {
+            label = "CYD LCD Backlight";
+            pwms = <&ledc0 3 PWM_HZ(5000) PWM_POLARITY_NORMAL>;
+        };
+    };
+
+    mipi_dbi {
+        compatible = "zephyr,mipi-dbi-spi";
+
+        spi-dev = <&spi2>;
+        dc-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+
+        write-only;
+        xfr-min-bits = "MIPI_DBI_SPI_XFR_8BIT";
+
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        lcd: st7796s@0 {
+            compatible = "sitronix,st7796s";
+
+            reg = <0>;
+
+            mipi-max-frequency = <32000000>;
+            mipi-mode = "MIPI_DBI_MODE_SPI_4WIRE";
+
+            width = <320>;
+            height = <480>;
+
+            frmctl1 = [80 10];
+
+            bpc = [1f 50 00 20];
+            dfc = [8a 07 3b];
+
+            pwr1 = [80 64];
+            pwr2 = <0x13>;
+            pwr3 = <0xa7>;
+
+            vcmpctl = <0x09>;
+
+            doca = [40 8a 00 00 29 19 a5 33];
+
+            pgc = [f0 06 0b 07 06 05 2e 33 47 3a 17 16 2e 31];
+            ngc = [f0 09 0d 09 08 23 2e 33 46 38 13 13 2c 32];
+
+            madctl = <0x48>;
+            rgb-is-inverted;
+        };
+    };
+
+    zephyr,user {
+        io-channels = <&adc0 6>;
+    };
+};
+
+&flash0 {
+    reg = <0x0 DT_SIZE_M(4)>;
+    ranges = <0x0 0x0 DT_SIZE_M(4)>;
+};
+
+&uart0 {
+    status = "okay";
+    current-speed = <115200>;
+    pinctrl-0 = <&uart0_default>;
+    pinctrl-names = "default";
+};
+
+&spi2 {
+    status = "okay";
+
+    pinctrl-0 = <&spim2_default>;
+    pinctrl-names = "default";
+
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    cs-gpios = <&gpio0 15 GPIO_ACTIVE_LOW>,
+               <&gpio1 1 GPIO_ACTIVE_LOW>;
+
+    touchscreen: xpt2046@1 {
+        compatible = "xptek,xpt2046";
+        reg = <1>;
+
+        spi-max-frequency = <2000000>;
+
+        int-gpios = <&gpio1 4 GPIO_ACTIVE_LOW>;
+
+        touchscreen-size-x = <320>;
+        touchscreen-size-y = <480>;
+
+        screen-width = <320>;
+        screen-height = <480>;
+
+        min-x = <600>;
+        max-x = <3750>;
+        min-y = <300>;
+        max-y = <3800>;
+
+        inverted-x;
+        inverted-y;
+
+        z-threshold = <100>;
+        reads = <5>;
+
+        status = "okay";
+    };
+};
+
+&gpio0 {
+    gpio-reserved-ranges = <6 6>, <20 1>, <24 1>, <28 4>;
+    status = "okay";
+};
+
+&gpio1 {
+    gpio-reserved-ranges = <5 2>;
+    status = "okay";
+};
+
+&adc0 {
+    status = "okay";
+
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    channel@6 {
+        reg = <6>;
+
+        zephyr,gain = "ADC_GAIN_1_2";
+        zephyr,reference = "ADC_REF_INTERNAL";
+        zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+        zephyr,resolution = <12>;
+    };
+};
+
+&timer0 {
+    status = "disabled";
+};
+
+&timer1 {
+    status = "disabled";
+};
+
+&timer2 {
+    status = "disabled";
+};
+
+&timer3 {
+    status = "disabled";
+};
+
+&trng0 {
+    status = "okay";
+};
+
+&ledc0 {
+    status = "okay";
+
+    pinctrl-0 = <&ledc0_default>;
+    pinctrl-names = "default";
+
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    channel0@0 {
+        reg = <0>;
+        timer = <0>;
+    };
+
+    channel1@1 {
+        reg = <1>;
+        timer = <0>;
+    };
+
+    channel2@2 {
+        reg = <2>;
+        timer = <0>;
+    };
+
+    channel3@3 {
+        reg = <3>;
+        timer = <0>;
+    };
+};

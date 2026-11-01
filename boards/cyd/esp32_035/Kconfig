@@ -1,0 +1,24 @@
+config HEAP_MEM_POOL_ADD_SIZE_BOARD
+    int
+    default 4096 if BOARD_ESP32_035_ESP32_PROCPU
+
+choice CYD_LCD_ROTATION
+    prompt "CYD LCD orientation (fixed at boot)"
+    default CYD_LCD_ROTATION_0
+    help
+      Select the ST7796S display orientation at build time.
+      Touchscreen orientation follows the LCD configuration.
+
+config CYD_LCD_ROTATION_0
+    bool "0 degrees (portrait)"
+
+config CYD_LCD_ROTATION_90
+    bool "90 degrees clockwise (landscape)"
+
+config CYD_LCD_ROTATION_180
+    bool "180 degrees (portrait)"
+
+config CYD_LCD_ROTATION_270
+    bool "270 degrees clockwise (landscape)"
+
+endchoice

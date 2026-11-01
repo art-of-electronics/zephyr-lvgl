@@ -1,0 +1,10 @@
+identifier: esp32_035/esp32/procpu
+name: CYD ESP32-035 PROCPU
+type: mcu
+arch: xtensa
+toolchain:
+  - zephyr
+supported:
+  - gpio
+  - uart
+  - watchdog

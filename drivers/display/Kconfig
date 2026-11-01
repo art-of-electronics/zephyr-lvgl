@@ -1,1 +1,2 @@
 rsource "esp32_lcd_cam_rgb/Kconfig"
+rsource "cyd_st7796s/Kconfig"
