@@ -102,6 +102,10 @@
             rgb-is-inverted;
         };
     };
+
+    zephyr,user {
+        io-channels = <&adc0 6>;
+    };
 };
 
 &flash0 {
@@ -165,6 +169,22 @@
 &gpio1 {
     gpio-reserved-ranges = <5 2>;
     status = "okay";
+};
+
+&adc0 {
+    status = "okay";
+
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    channel@6 {
+        reg = <6>;
+
+        zephyr,gain = "ADC_GAIN_1_2";
+        zephyr,reference = "ADC_REF_INTERNAL";
+        zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+        zephyr,resolution = <12>;
+    };
 };
 
 &timer0 {
