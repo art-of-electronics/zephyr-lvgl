@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define THREAD_DEMO_LCD_STACK_SIZE  (4096)
+#define THREAD_DEMO_LCD_STACK_SIZE  (8192)
 #define THREAD_DEMO_LCD_PRIORITY    (5)
 
 int demo_lcd_pwm_init(void);

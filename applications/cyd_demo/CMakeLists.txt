@@ -13,7 +13,7 @@ target_sources(app PRIVATE
     src/main.c
     src/demo_rgb.c
     src/demo_lcd.c
-    src/demo_touch.c
+    #src/demo_touch.c
 )
 
 set(external_project_cflags
