@@ -141,7 +141,7 @@ static void create_morphball_anim(lv_obj_t *screen)
 
 	int32_t animation_start_x = 0;
 	int32_t animation_end_x = screen_width - ANIMATION_BOX_SIZE;
-	int32_t animation_y = screen_height - 150U;
+	int32_t animation_y = screen_height - 130U;
 
 	morph_ball = lv_obj_create(screen);
 
@@ -204,7 +204,7 @@ static void create_version(lv_obj_t *screen, bool show_signature)
 
 	version_label = lv_label_create(screen);
 	lv_label_set_text(version_label, version_text);
-	lv_obj_set_style_text_font(version_label, &lv_font_montserrat_48, LV_PART_MAIN);
+	lv_obj_set_style_text_font(version_label, &lv_font_montserrat_40, LV_PART_MAIN);
 	lv_obj_set_style_text_color(version_label, lv_color_hex(SAMUS_ORANGE), LV_PART_MAIN);
 	lv_obj_set_style_text_align(version_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
 	lv_obj_center(version_label);
