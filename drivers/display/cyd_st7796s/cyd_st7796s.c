@@ -16,7 +16,6 @@ LOG_MODULE_REGISTER(cyd_st7796s, LOG_LEVEL_INF);
 #define LCD_CMD_COLMOD      (0x3AU)
 #define LCD_CMD_MADCTL      (0x36U)
 #define LCD_COLMOD_RGB565   (0x05U)
-#define LCD_MADCTL_VALUE    (0x48U)
 #define LCD_CMD_PGC         (0xE0U)
 #define LCD_CMD_NGC         (0xE1U)
 #define LCD_CMD_CSCON       (0xF0U)
@@ -59,7 +58,7 @@ static const uint8_t lcd_unlock_2 = LCD_UNLOCK_2;
 static const uint8_t lcd_lock_1 = LCD_LOCK_1;
 static const uint8_t lcd_lock_2 = LCD_LOCK_2;
 static const uint8_t lcd_colmod = LCD_COLMOD_RGB565;
-static const uint8_t lcd_madctl = LCD_MADCTL_VALUE;
+const uint8_t lcd_madctl = (uint8_t)DT_PROP(LCD_NODE, madctl);
 
 struct lcd_init_command {
     uint8_t command;
