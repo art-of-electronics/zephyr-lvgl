@@ -55,22 +55,21 @@ static void animate(lv_timer_t *timer)
         direction = -1;
     }
 
-    // Degrees * 10 = (distance / radius) * (1800 / pi).
-    angle_tenths += (int32_t)(((int64_t)dx_milli * 1800) /
-                              (BALL_RADIUS_PX * PI_APPROX_MILLI));
+    angle_tenths += (int32_t)(((int64_t)dx_milli * 1800) / (BALL_RADIUS_PX * PI_APPROX_MILLI));
     angle_tenths %= ANGLE_FULL_TURN;
     if (0 > angle_tenths) {
         angle_tenths += ANGLE_FULL_TURN;
     }
+
     lv_obj_set_pos(ball, ball_x_milli / MILLI_SCALE, ball_y);
     lv_image_set_rotation(ball, angle_tenths);
 }
 
 int main(void)
 {
-    const struct device *display_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
     int ret = 0;
 
+    const struct device *display_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
     if (false == device_is_ready(display_dev))
     {
         LOG_ERR("Display device not ready");
@@ -86,7 +85,7 @@ int main(void)
     lv_obj_t *screen = lv_screen_active();
     lv_obj_set_style_bg_color(screen, lv_color_hex(0x07101B), 0);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(screen, false);
 
     lv_obj_t *title = lv_label_create(screen);
     lv_label_set_text(title, "MORPH BALL");
@@ -114,12 +113,12 @@ int main(void)
     lv_obj_set_style_bg_color(floor, lv_color_hex(0xF07818), 0);
     lv_obj_set_style_border_width(floor, 0, 0);
     lv_obj_set_style_radius(floor, 0, 0);
-    lv_obj_remove_flag(floor, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(floor, false);
 
     ball = lv_image_create(screen);
     lv_image_set_src(ball, &morph_ball);
     lv_image_set_pivot(ball, BALL_RADIUS_PX, BALL_RADIUS_PX);
-    lv_obj_add_flag(ball, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(ball, true);
     lv_obj_add_event_cb(ball, on_touch, LV_EVENT_CLICKED, NULL);
 
     max_x = lv_display_get_horizontal_resolution(display) - BALL_SIZE_PX;
