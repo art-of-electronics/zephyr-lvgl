@@ -38,6 +38,9 @@ No STM32CubeIDE, TouchGFX, or external BSP is required.
 ## Features
 
 - Animated 64 × 64 Morph Ball sprite with transparency.
+- Dynamic green energy glow beneath the Morph Ball.
+- Yellow impact flash using LVGL image recoloring.
+- Smooth acceleration and deceleration with position-synchronized rotation.
 - Continuous horizontal movement with automatic direction reversal at screen boundaries.
 - Position-based rotation simulating rolling without slipping.
 - Touch interaction for reversing movement direction.
@@ -79,7 +82,7 @@ Example output:
 ```text
 *** Booting Zephyr OS build v4.5.0 ***
 <inf> morph_ball: Morph Ball demo started
-<inf> morph_ball: FPS: 47 | APS: 47 | LVGL avg: 11058 us | LVGL max: 14734 us
+<inf> morph_ball: FPS: 46 | APS: 46 | LVGL avg: 11670 us | LVGL max: 19005 us
 ```
 
 The reported metrics are:
@@ -101,10 +104,10 @@ The following results were observed on STM32H7B3I-DK:
 
 | Metric | Result |
 |---|---|
-| FPS | ~47 |
-| APS | ~47 |
-| Average LVGL handler time | ~11 ms |
-| Maximum LVGL handler time | ~15 ms |
+| FPS | ~45–46 |
+| APS | ~45–46 |
+| Average LVGL handler time | ~11.7 ms |
+| Maximum LVGL handler time | ~19–31 ms |
 
 Measurements were collected with partial refresh, double buffering, and DMA2D enabled.
 

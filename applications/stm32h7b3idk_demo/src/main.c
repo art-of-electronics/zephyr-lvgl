@@ -17,15 +17,20 @@ LOG_MODULE_REGISTER(morph_ball, LOG_LEVEL_INF);
 #define MILLI_SCALE     (1000U)
 #define MAX_DELTA_MS    (100U)
 
+#define TIMER_PERIOD_MS (16U)
+#define ANGLE_FULL_TURN (3600U)
+
 #define FLOOR_OFFSET_PX (34U)
 #define FLOOR_HEIGHT_PX (3U)
 #define BALL_SIZE_PX    (64U)
 #define BALL_RADIUS_PX  ((BALL_SIZE_PX) / 2U)
 #define BALL_CIRCUMFERENCE_MILLI (2U * BALL_RADIUS_PX * PI_APPROX_MILLI)
 
-#define BALL_SPEED_PX_S (120U)
-#define TIMER_PERIOD_MS (16U)
-#define ANGLE_FULL_TURN (3600U)
+#define BALL_SPEED_MIN_PX_S     (60U)
+#define BALL_SPEED_MAX_PX_S     (180U)
+#define BALL_ACCEL_PX_S2        (240U)
+#define BALL_DECEL_PX_S2        (360U)
+#define BALL_BRAKING_ZONE_PX    (96U)
 
 #define GLOW_WIDTH_PX      (48)
 #define GLOW_HEIGHT_PX     (8)
@@ -73,6 +78,7 @@ static int32_t direction = 1;
 static int32_t angle_tenths = 0;
 static uint32_t previous_ms = 0U;
 static int32_t max_x = 0;
+static int32_t ball_speed_milli = (int32_t)(BALL_SPEED_MIN_PX_S * MILLI_SCALE);
 
 static lv_obj_t *glow = NULL;
 static uint8_t glow_opacity = GLOW_OPA_MIN;
@@ -121,6 +127,54 @@ static void update_ball_glow(void)
     lv_obj_set_style_bg_opa(glow, glow_opacity, 0);
 }
 
+static int32_t get_target_speed(void)
+{
+    int32_t distance_px = 0;
+    int32_t target_speed = (int32_t)BALL_SPEED_MAX_PX_S;
+
+    if (0 < direction) {
+        distance_px = max_x - (ball_x_milli / (int32_t)MILLI_SCALE);
+    } else {
+        distance_px = ball_x_milli / (int32_t)MILLI_SCALE;
+    }
+
+    if (0 > distance_px) {
+        distance_px = 0;
+    }
+
+    if ((int32_t)BALL_BRAKING_ZONE_PX > distance_px) {
+        target_speed = (int32_t)BALL_SPEED_MIN_PX_S +
+                       (((int32_t)(BALL_SPEED_MAX_PX_S - BALL_SPEED_MIN_PX_S) * distance_px) / 
+                        (int32_t)BALL_BRAKING_ZONE_PX);
+    }
+
+    return target_speed * (int32_t)MILLI_SCALE;
+}
+
+static void update_ball_speed(uint32_t delta_ms)
+{
+    int32_t target_speed = get_target_speed();
+    int32_t speed_step = 0;
+
+    if (ball_speed_milli < target_speed) {
+        speed_step = (int32_t)(BALL_ACCEL_PX_S2 * delta_ms);
+
+        ball_speed_milli += speed_step;
+
+        if (target_speed < ball_speed_milli) {
+            ball_speed_milli = target_speed;
+        }
+    } else if (ball_speed_milli > target_speed) {
+        speed_step = (int32_t)(BALL_DECEL_PX_S2 * delta_ms);
+
+        ball_speed_milli -= speed_step;
+
+        if (target_speed > ball_speed_milli) {
+            ball_speed_milli = target_speed;
+        }
+    }
+}
+
 static void trigger_impact(void)
 {
     impact_remaining_ms = IMPACT_DURATION_MS;
@@ -161,16 +215,21 @@ static void animate(lv_timer_t *timer)
         delta_ms = MAX_DELTA_MS;
     }
 
-    int32_t dx_milli = direction * BALL_SPEED_PX_S * (int32_t)delta_ms;
+    update_ball_speed(delta_ms);
+
+    int32_t dx_milli = (int32_t)(((int64_t)direction * ball_speed_milli * 
+                                  (int32_t)delta_ms) / (int32_t)MILLI_SCALE);
     ball_x_milli += dx_milli;
 
     if (0 > ball_x_milli) {
         ball_x_milli = -ball_x_milli;
         direction = 1;
+        ball_speed_milli = (int32_t)(BALL_SPEED_MIN_PX_S * MILLI_SCALE);
         trigger_impact();
-    } else if ((max_x * MILLI_SCALE) < ball_x_milli) {
-        ball_x_milli = (2 * max_x * MILLI_SCALE) - ball_x_milli;
+    } else if ((max_x * (int32_t)MILLI_SCALE) < ball_x_milli) {
+        ball_x_milli = (2 * max_x * (int32_t)MILLI_SCALE) - ball_x_milli;
         direction = -1;
+        ball_speed_milli = (int32_t)(BALL_SPEED_MIN_PX_S * MILLI_SCALE);
         trigger_impact();
     }
 
