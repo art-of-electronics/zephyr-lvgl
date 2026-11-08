@@ -70,17 +70,7 @@ west build -p always \
 
 ### 480 × 272 — UEDX80480043E-WB-A v1.3
 
-Check the board identifier available in your checkout:
-
 ```bash
-west boards | grep -i uedx
-```
-
-Use the registered **480 × 272** target in the build command:
-
-```bash
-BOARD_4827="<your-480x272-board-target>"
-
 west build -p always \
 "$HOME/VSCodeProjects/zephyr-lvgl/applications/viewe_demo" \
 -b uedx48270043e_wb_a@1.3.0/esp32s3/procpu \
