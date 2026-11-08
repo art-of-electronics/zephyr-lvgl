@@ -35,6 +35,7 @@ The current implementation provides:
 | VIEWE UEDX80480050E-WB-A v1.2 | ESP32-S3-WROOM-1 N16R8 | 800 × 480 RGB LCD | GT911 | Tested |
 | VIEWE UEDX80480043E-WB-A v1.3 | ESP32-S3-WROOM-1 N16R8 | 480 × 272 RGB LCD | GT911 | Tested |
 | CYD ESP32-035 | ESP32-D0WD-V3 | 320 × 480 ST7796S SPI LCD | XPT2046 | Tested |
+| STM32H7B3I-DK | STM32H7B3LIH6Q | 480 × 272 LTDC LCD | FT5336 | Tested |
 
 Hardware-specific configurations, supported features, and known limitations are documented in the corresponding demonstration applications.
 
@@ -45,12 +46,13 @@ Hardware-specific configurations, supported features, and known limitations are 
 ```text
 zephyr-lvgl/
 ├── applications/
-│   ├── viewe_demo/
-│   └── cyd_demo/
+│   ├── cyd_demo/
+│   ├── stm32h7b3idk_demo/
+│   └── viewe_demo/
 │
 ├── boards/
-│   ├── viewe/
-│   └── cyd/
+│   ├── cyd/
+│   └── viewe/
 │
 └── drivers/
 ```
@@ -96,8 +98,9 @@ Each supported hardware family has a dedicated demonstration application contain
 
 | Application | Supported Hardware | Documentation |
 |---|---|---|
-| `viewe_demo` | VIEWE ESP32-S3 displays | [README](applications/viewe_demo/README.md) |
-| `cyd_demo` | CYD ESP32-035 | [README](applications/cyd_demo/README.md) |
+| `cyd_demo` | CYD ESP32-035 | [README](applications/cyd_demo/Readme.md) |
+| `stm32h7b3idk_demo` | STM32H7B3I-DK | [README](applications/stm32h7b3idk_demo/Readme.md) |
+| `viewe_demo` | VIEWE ESP32-S3 displays | [README](applications/viewe_demo/Readme.md) |
 
 Select the appropriate application and follow its documentation to build, flash, and test the target hardware.
 
