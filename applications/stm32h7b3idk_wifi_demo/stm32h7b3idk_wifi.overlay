@@ -1,0 +1,47 @@
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+    chosen {
+        zephyr,entropy = &rng;
+    };
+};
+
+&rng {
+    status = "okay";
+};
+
+/ {
+    aliases {
+        wifi0 = &eswifi0;
+    };
+};
+
+&fdcan1 {
+    status = "disabled";
+};
+
+&spi2 {
+    pinctrl-0 = <&spi2_sck_pa12
+                 &spi2_miso_pc2
+                 &spi2_mosi_pc3>;
+    pinctrl-names = "default";
+
+    cs-gpios = <&gpioa 11 GPIO_ACTIVE_LOW>;
+
+    status = "okay";
+
+    eswifi0: wifi@0 {
+        compatible = "inventek,eswifi";
+        reg = <0>;
+        spi-max-frequency = <2000000>;
+
+        spi-cs-setup-delay-ns = <15000>;
+        spi-cs-hold-delay-ns = <15000>;
+
+        resetn-gpios = <&gpioi 1 GPIO_ACTIVE_HIGH>;
+        wakeup-gpios = <&gpioi 2 GPIO_ACTIVE_HIGH>;
+        data-gpios = <&gpioi 5 GPIO_ACTIVE_HIGH>;
+
+        status = "okay";
+    };
+};
