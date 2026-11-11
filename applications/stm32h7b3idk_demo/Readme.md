@@ -133,8 +133,8 @@ The environment must contain an initialized Zephyr workspace with the required d
 
 ```bash
 west build -p always \
-    "$HOME/VSCodeProjects/zephyr-lvgl/applications/stm32h7b3idk_demo" \
-    -b stm32h7b3i_dk
+-b stm32h7b3i_dk \
+"$HOME/VSCodeProjects/zephyr-lvgl/applications/stm32h7b3idk_demo"
 ```
 
 ### Flash

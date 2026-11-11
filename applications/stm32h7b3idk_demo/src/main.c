@@ -5,6 +5,7 @@
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/display.h>
+#include <zephyr/drivers/pwm.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/version.h>
@@ -12,6 +13,11 @@
 #include <lvgl.h>
 
 LOG_MODULE_REGISTER(morph_ball, LOG_LEVEL_INF);
+
+#define BACKLIGHT_NODE DT_NODELABEL(lcd_backlight)
+#define BACKLIGHT_LOW_PERCENT   (35U)
+#define BACKLIGHT_HIGH_PERCENT  (85U)
+#define BACKLIGHT_PERCENT_MAX   (100U)
 
 #define PI_APPROX_MILLI (3142U)
 #define MILLI_SCALE     (1000U)
@@ -87,6 +93,65 @@ static int32_t glow_direction = 1;
 static uint32_t impact_remaining_ms = 0U;
 
 static lv_obj_t *performance_label = NULL;
+
+static bool backlight_high = true;
+static lv_obj_t *backlight_button = NULL;
+static lv_obj_t *backlight_icon = NULL;
+
+static const struct pwm_dt_spec backlight = PWM_DT_SPEC_GET(BACKLIGHT_NODE);
+
+static int backlight_set_brightness(uint32_t percent)
+{
+    uint32_t pulse_ns = 0U;
+
+    if (BACKLIGHT_PERCENT_MAX < percent) {
+        return -EINVAL;
+    }
+
+    pulse_ns = (uint32_t)(((uint64_t)backlight.period * percent) / BACKLIGHT_PERCENT_MAX);
+    return pwm_set_dt(&backlight, backlight.period, pulse_ns);
+}
+
+static void backlight_button_cb(lv_event_t *event)
+{
+    int ret = 0;
+    uint32_t brightness = BACKLIGHT_LOW_PERCENT;
+
+    ARG_UNUSED(event);
+
+    brightness = (true == backlight_high) ? (BACKLIGHT_LOW_PERCENT) : (BACKLIGHT_HIGH_PERCENT);
+    ret = backlight_set_brightness(brightness);
+    if (0 != ret) {
+        LOG_ERR("Backlight PWM error: %d", ret);
+        return;
+    }
+
+    backlight_high = !backlight_high;
+    lv_label_set_text(backlight_icon, (true == backlight_high) ? (LV_SYMBOL_EYE_OPEN) : (LV_SYMBOL_EYE_CLOSE));
+}
+
+static void create_backlight_button(lv_obj_t *screen)
+{
+    backlight_button = lv_button_create(screen);
+
+    lv_obj_remove_style_all(backlight_button);
+
+    lv_obj_set_size(backlight_button, 42, 42);
+    lv_obj_align(backlight_button, LV_ALIGN_TOP_LEFT, 8, 8);
+    lv_obj_set_style_radius(backlight_button, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(backlight_button, lv_color_hex(CHOZO_DARK_BLUE), 0);
+    lv_obj_set_style_bg_opa(backlight_button, LV_OPA_COVER, 0);
+
+    lv_obj_set_style_border_width(backlight_button, 2, 0);
+    lv_obj_set_style_border_color(backlight_button, lv_color_hex(SAMUS_VARIA_ORANGE), 0);
+
+    lv_obj_add_event_cb(backlight_button, backlight_button_cb, LV_EVENT_CLICKED, NULL);
+
+    backlight_icon = lv_label_create(backlight_button);
+    lv_label_set_text(backlight_icon, LV_SYMBOL_EYE_OPEN);
+    lv_obj_center(backlight_icon);
+    lv_obj_set_style_text_color(backlight_icon, lv_color_hex(SAMUS_YELLOW), 0);
+}
 
 static void performance_callback(lv_event_t *event)
 {
@@ -309,7 +374,7 @@ int main(void)
     int ret = 0;
 
     const struct device *display_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
-    if (false == device_is_ready(display_dev)) {
+    if (true != device_is_ready(display_dev)) {
         LOG_ERR("Display device not ready");
         return 0;
     }  
@@ -320,7 +385,18 @@ int main(void)
         return 0;
     }
 
+    if (true != pwm_is_ready_dt(&backlight)) {
+        LOG_ERR("Backlight PWM device not ready");
+        return 0;
+    }
+
+    ret = backlight_set_brightness(BACKLIGHT_HIGH_PERCENT);
+    if (0 != ret) {
+        LOG_ERR("Backlight PWM error: %d", ret);
+    }
+
     lv_display_add_event_cb(display, performance_callback, LV_EVENT_REFR_READY, NULL);
+    create_backlight_button(lv_screen_active());
 
     lv_obj_t *screen = lv_screen_active();
     lv_obj_set_style_bg_color(screen, lv_color_hex(CHOZO_DARK_BLUE), 0);
@@ -338,13 +414,6 @@ int main(void)
 			       (unsigned int)KERNEL_VERSION_MAJOR, (unsigned int)KERNEL_VERSION_MINOR,
 			       (unsigned int)lv_version_major(), (unsigned int)lv_version_minor());
 
-    performance_label = lv_label_create(screen);
-    lv_label_set_text(performance_label, "FPS: --\nAPS: --");
-    lv_obj_set_style_text_font(performance_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(performance_label, lv_color_hex(DARK_SAMUS_BLUE), LV_PART_MAIN);
-    lv_obj_set_style_text_align(performance_label, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
-    lv_obj_align(performance_label, LV_ALIGN_TOP_RIGHT, -10, 10);
-
     lv_obj_t *version_label = lv_label_create(screen);
     lv_label_set_text(version_label, version_text);
 	lv_obj_set_style_text_font(version_label, &lv_font_montserrat_40, LV_PART_MAIN);
@@ -359,6 +428,13 @@ int main(void)
     lv_obj_set_style_border_width(floor, 0, 0);
     lv_obj_set_style_radius(floor, 0, 0);
     lv_obj_set_scrollable(floor, false);
+
+    performance_label = lv_label_create(screen);
+    lv_label_set_text(performance_label, "FPS: --\nAPS: --");
+    lv_obj_set_style_text_font(performance_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(performance_label, lv_color_hex(DARK_SAMUS_BLUE), LV_PART_MAIN);
+    lv_obj_set_style_text_align(performance_label, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    lv_obj_align(performance_label, LV_ALIGN_TOP_RIGHT, -10, 10);
 
     ball = lv_image_create(screen);
     lv_image_set_src(ball, &morph_ball);
