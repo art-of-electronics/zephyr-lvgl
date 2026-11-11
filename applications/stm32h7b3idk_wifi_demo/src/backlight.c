@@ -19,18 +19,6 @@ static lv_obj_t *backlight_icon = NULL;
 
 static const struct pwm_dt_spec backlight = PWM_DT_SPEC_GET(BACKLIGHT_NODE);
 
-static int backlight_set_brightness(uint32_t percent)
-{
-    uint32_t pulse_ns = 0U;
-
-    if (BACKLIGHT_PERCENT_MAX < percent) {
-        return -EINVAL;
-    }
-
-    pulse_ns = (uint32_t)(((uint64_t)backlight.period * percent) / BACKLIGHT_PERCENT_MAX);
-    return pwm_set_dt(&backlight, backlight.period, pulse_ns);
-}
-
 static void backlight_button_cb(lv_event_t *event)
 {
     int ret = 0;
@@ -49,11 +37,30 @@ static void backlight_button_cb(lv_event_t *event)
     lv_label_set_text(backlight_icon, (true == backlight_high) ? (LV_SYMBOL_EYE_OPEN) : (LV_SYMBOL_EYE_CLOSE));
 }
 
-void backlight_button_create(lv_obj_t *screen, backlight_btn_t colors)
+int backlight_set_brightness(uint32_t percent)
+{
+    uint32_t pulse_ns = 0U;
+
+    if (BACKLIGHT_PERCENT_MAX < percent) {
+        return -EINVAL;
+    }
+
+    pulse_ns = (uint32_t)(((uint64_t)backlight.period * percent) / BACKLIGHT_PERCENT_MAX);
+    return pwm_set_dt(&backlight, backlight.period, pulse_ns);
+}
+
+uint32_t backlight_get_brightness(void)
+{
+    return (true == backlight_high) ? (BACKLIGHT_HIGH_PERCENT) : (BACKLIGHT_LOW_PERCENT);
+}
+
+void backlight_button_create(lv_obj_t *screen, backlight_btn_t colors, bool enable_anim)
 {
     backlight_button = lv_button_create(screen);
 
-    lv_obj_remove_style_all(backlight_button);
+    if (true != enable_anim) {
+        lv_obj_remove_style_all(backlight_button);
+    }
 
     lv_obj_set_size(backlight_button, 42, 42);
     lv_obj_align(backlight_button, LV_ALIGN_TOP_LEFT, 8, 8);
