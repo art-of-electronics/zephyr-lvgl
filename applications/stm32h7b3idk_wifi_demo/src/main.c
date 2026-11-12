@@ -9,6 +9,7 @@
 #include <theme.h>
 
 #include <gui_wifi.h>
+#include <gui_wifi_scan.h>
 
 LOG_MODULE_REGISTER(app_main, LOG_LEVEL_INF);
 
@@ -60,6 +61,8 @@ int main(void)
     }
 
     while (true) {
+        gui_wifi_scan_process();
+
         start_cycles = k_cycle_get_32();
 
         (void)lv_timer_handler();

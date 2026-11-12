@@ -31,7 +31,7 @@ static perf_stats_t perf_stats = {0};
 static atomic_t frame_count = ATOMIC_INIT(0);
 static atomic_t animation_count = ATOMIC_INIT(0);
 
-static lv_obj_t *performance_label = NULL;
+//static lv_obj_t *performance_label = NULL;
 
 static bool print_report = false;
 static uint32_t previous_report_ms = 0U;
@@ -50,7 +50,7 @@ int performance_init(lv_obj_t *screen, bool enable_print_report)
     (void)atomic_set(&animation_count, 0);
 
     previous_report_ms = k_uptime_get_32();
-
+/*
     performance_label = lv_label_create(screen);
     if (NULL == performance_label) {
         return -ENOMEM;
@@ -61,7 +61,7 @@ int performance_init(lv_obj_t *screen, bool enable_print_report)
     lv_obj_set_style_text_color(performance_label, lv_color_hex(DARK_SAMUS_BLUE), LV_PART_MAIN);
     lv_obj_set_style_text_align(performance_label, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
     lv_obj_align(performance_label, LV_ALIGN_TOP_RIGHT, PERF_LABEL_X_POS, PERF_LABEL_Y_POS);
-
+*/
     return 0;
 }
 
@@ -120,11 +120,11 @@ void performance_report(void)
 
     (void)snprintf(performance_text, sizeof(performance_text), 
                    "FPS: %u\nAPS: %u", fps, aps);
-
+/*
     if (NULL != performance_label) {
         lv_label_set_text(performance_label, performance_text);
     }
-
+*/
     if (true == print_report) {
         LOG_INF("FPS: %u | APS: %u | LVGL avg: %llu us | LVGL max: %llu us",
                 fps, aps,

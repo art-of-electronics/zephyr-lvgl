@@ -54,5 +54,4 @@ int backlight_set_brightness(uint32_t percent);
  */
 uint32_t backlight_get_brightness(void);
 
-
 #endif //BACKLIGHT_H

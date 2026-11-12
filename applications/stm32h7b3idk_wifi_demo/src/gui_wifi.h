@@ -1,5 +1,5 @@
 /**
- * @file wifi_gui.h
+ * @file gui_wifi.h
  * @brief LVGL user interface for Wi-Fi management.
  */
 

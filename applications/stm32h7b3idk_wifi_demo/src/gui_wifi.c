@@ -3,6 +3,7 @@
 #include <lvgl.h>
 
 #include <gui_wifi.h>
+#include <gui_wifi_scan.h>
 #include <backlight.h>
 
 #define WIFI_BUTTON_WIDTH       (130)
@@ -22,6 +23,7 @@ static lv_obj_t *register_screen = NULL;
 
 static lv_obj_t *fade_overlay = NULL;
 static lv_obj_t *fade_target = NULL;
+static lv_obj_t *fade_source = NULL;
 static bool fade_screen_loaded = false;
 
 static uint32_t fade_start_brightness = 0U;
@@ -41,6 +43,7 @@ static void wifi_gui_fade_exec(void *obj, int32_t brightness)
 static void wifi_gui_fade_completed(lv_anim_t *anim)
 {
     (void)anim;
+
     (void)backlight_set_brightness(fade_start_brightness);
 
     if (NULL != fade_overlay) {
@@ -50,6 +53,17 @@ static void wifi_gui_fade_completed(lv_anim_t *anim)
 
     fade_target = NULL;
     fade_screen_loaded = false;
+
+    if ((scan_screen == fade_source) &&
+        (scan_screen != lv_screen_active())) {
+        gui_wifi_scan_close();
+    }
+
+    fade_source = NULL;
+
+    if (scan_screen == lv_screen_active()) {
+        gui_wifi_scan_start();
+    }
 }
 
 static void wifi_gui_switch_screen(lv_obj_t *target)
@@ -71,6 +85,7 @@ static void wifi_gui_switch_screen(lv_obj_t *target)
 
     fade_target = target;
     fade_screen_loaded = false;
+    fade_source = lv_screen_active();
 
     lv_obj_remove_style_all(fade_overlay);
     lv_obj_set_size(fade_overlay, LV_PCT(100), LV_PCT(100));
@@ -189,6 +204,17 @@ int gui_wifi_init(lv_obj_t *screen, lv_color_t background, lv_color_t accent)
         lv_obj_delete(scan_screen);
         scan_screen = NULL;
         return -ENOMEM;
+    }
+
+    int ret = gui_wifi_scan_init(scan_screen, accent);
+    if (0 != ret) {
+        lv_obj_delete(scan_screen);
+        lv_obj_delete(register_screen);
+
+        scan_screen = NULL;
+        register_screen = NULL;
+
+        return ret;
     }
 
     scan_button = wifi_gui_create_button(screen, "SCAN", scan_screen, accent, background);
