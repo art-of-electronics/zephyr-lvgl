@@ -12,6 +12,7 @@
 
 #include <gui_wifi.h>
 #include <gui_wifi_scan.h>
+#include <gui_wifi_register.h>
 
 
 /*****************************************************************************
@@ -75,6 +76,7 @@ int main(void)
 
     while (true) {
         gui_wifi_scan_process();
+        gui_wifi_register_process();
 
         (void)lv_timer_handler();
         k_sleep(K_MSEC(MAIN_LOOP_PERIOD_MS));

@@ -21,11 +21,9 @@
 *****************************************************************************/
 /**
  * @brief Initialize the Wi-Fi management interface.
- *
  * @param[in] screen Main LVGL screen.
  * @param[in] background Background color.
  * @param[in] accent Accent color for buttons and labels.
- *
  * @retval 0 Initialization completed successfully.
  * @retval -EINVAL Invalid screen pointer.
  * @retval -ENOMEM Failed to create an LVGL object.

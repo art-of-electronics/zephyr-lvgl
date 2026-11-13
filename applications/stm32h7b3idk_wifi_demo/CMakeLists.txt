@@ -16,4 +16,6 @@ target_sources(app PRIVATE
     src/backlight.c
     src/gui_wifi.c
     src/gui_wifi_scan.c
+    src/gui_wifi_register.c
+    src/wifi_connection.c
 )

@@ -24,9 +24,7 @@
 *****************************************************************************/
 /**
  * @brief Initialize the display user interface.
- * 
  * @param [in] color_bg Screen backgroud color.
- * 
  * @retval 0 Initialization completed successfully.
  * @retval -ENODEV Display device or LVGL display is unavailable.
  */
@@ -34,7 +32,6 @@ int app_display_init(lv_color_t color_bg);
 
 /**
  * @brief Enable the display and initialize its backlight.
- * 
  * @retval 0 Display enabled successfully.
  * @retval <0 Failed to disable display blanking.
  */
@@ -42,7 +39,6 @@ int app_display_enable(void);
 
 /**
  * @brief Create an LVGL label displaying Zephyr and LVGL versions.
- * 
  * @param [in] screen Parent LVGL object.
  * @param [in] text_color Text color.
  */

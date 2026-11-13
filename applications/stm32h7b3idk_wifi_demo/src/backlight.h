@@ -50,9 +50,7 @@ int backlight_init(void);
 
 /**
  * @brief Set LCD backlight brightness.
- *
  * @param[in] percent Brightness in the range 0-100%.
- *
  * @retval 0 Brightness updated successfully.
  * @retval <0 PWM configuration failed.
  */
@@ -60,7 +58,6 @@ int backlight_set_brightness(uint32_t percent);
 
 /**
  * @brief Get the user-selected backlight brightness.
- *
  * @return Brightness percentage.
  */
 uint32_t backlight_get_brightness(void);

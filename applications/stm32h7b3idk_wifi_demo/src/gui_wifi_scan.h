@@ -16,10 +16,8 @@
 *****************************************************************************/
 /**
  * @brief Initialize the Wi-Fi scan screen.
- *
  * @param[in] screen Parent LVGL screen.
  * @param[in] accent Accent color.
- *
  * @retval 0 Initialization successful.
  * @retval -EINVAL Invalid screen pointer.
  * @retval -ENOMEM LVGL object allocation failed.

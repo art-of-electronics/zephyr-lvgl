@@ -111,7 +111,7 @@ void app_display_create_version_label(lv_obj_t *screen, lv_color_t text_color)
     }
 
     lv_label_set_text(version_label, version_text);
-    lv_obj_set_style_text_font(version_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_font(version_label, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_set_style_text_color(version_label, text_color, LV_PART_MAIN);
     lv_obj_set_style_text_align(version_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_align(version_label, LV_ALIGN_TOP_MID, 0, VERSION_LABEL_Y_POS);
