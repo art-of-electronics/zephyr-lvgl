@@ -9,10 +9,21 @@
 #ifndef BACKLIGHT_H
 #define BACKLIGHT_H
 
+/*****************************************************************************
+                                    INCLUDES
+*****************************************************************************/
 #include <stdint.h>
 
 #include <lvgl.h>
 
+
+/*****************************************************************************
+                       PUBLIC DEFINES / MACROS / ENUMS
+*****************************************************************************/
+
+/*****************************************************************************
+                         PUBLIC INTERFACE DECLARATION
+*****************************************************************************/
 /**
  * @brief Color configuration for the backlight control button.
  * @note Defines the colors used by the LVGL backlight button and its graphical elements.
@@ -54,4 +65,4 @@ int backlight_set_brightness(uint32_t percent);
  */
 uint32_t backlight_get_brightness(void);
 
-#endif //BACKLIGHT_H
+#endif // BACKLIGHT_H

@@ -1,3 +1,6 @@
+/*****************************************************************************
+                                    INCLUDES
+*****************************************************************************/
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,6 +13,11 @@
 #include <lvgl.h>
 #include <theme.h>
 #include <gui_wifi_scan.h>
+
+
+/*****************************************************************************
+                          PRIVATE DEFINES / MACROS
+*****************************************************************************/
 
 #define WIFI_SCAN_MAX_RESULTS       (20U)
 #define WIFI_SCAN_QUEUE_SIZE        (WIFI_SCAN_MAX_RESULTS + 1U)
@@ -35,14 +43,22 @@
 #define WIFI_SCAN_ROW_SEPARATOR_W   (WIFI_SCAN_TABLE_WIDTH - (2 * WIFI_SCAN_ROW_SEPARATOR_X))
 #define WIFI_SCAN_TEXT_Y            (6)
 
-#define WIFI_SCAN_REFRESH_WIDTH     (90)
-#define WIFI_SCAN_REFRESH_HEIGHT    (36)
-#define WIFI_SCAN_REFRESH_OFFSET    (10)
-
 #define WIFI_SCAN_NUMBER_TEXT_SIZE  (8U)
 #define WIFI_SCAN_RSSI_TEXT_SIZE    (8U)
 #define WIFI_SCAN_STATUS_TEXT_SIZE  (40U)
 
+#define WIFI_STATUS_OFFSET_X      (12)
+#define WIFI_STATUS_OFFSET_Y      (-5)
+
+#define WIFI_SCAN_REFRESH_WIDTH         (90)
+#define WIFI_SCAN_REFRESH_HEIGHT        (24)
+#define WIFI_SCAN_REFRESH_OFFSET_X      (-10)
+#define WIFI_SCAN_REFRESH_OFFSET_Y      (-2)
+
+
+/*****************************************************************************
+                     PRIVATE STRUCTS / ENUMS / VARIABLES
+*****************************************************************************/
 enum wifi_scan_message_type {
     WIFI_SCAN_MESSAGE_RESULT,
     WIFI_SCAN_MESSAGE_DONE
@@ -70,6 +86,13 @@ static uint32_t scan_count = 0U;
 static bool scan_in_progress = false;
 static bool scan_visible = false;
 
+/*****************************************************************************
+                         PRIVATE FUNCTION DECLARATIONS
+*****************************************************************************/
+
+/*****************************************************************************
+                       PRIVATE FUNCTION IMPLEMENTATIONS
+*****************************************************************************/
 static void wifi_gui_scan_event_handler(struct net_mgmt_event_callback *cb,
                                         uint64_t event, struct net_if *iface)
 {
@@ -115,7 +138,8 @@ static void wifi_gui_scan_event_handler(struct net_mgmt_event_callback *cb,
     }
 }
 
-static lv_obj_t *wifi_gui_scan_create_cell(lv_obj_t *row, const char *text, int32_t x, int32_t width)
+static lv_obj_t *wifi_gui_scan_create_cell(lv_obj_t *row, const char *text, 
+                                           int32_t x, int32_t width)
 {
     lv_obj_t *label = NULL;
 
@@ -170,12 +194,15 @@ static void wifi_gui_scan_add_result(const struct wifi_scan_message *message)
     }
 
     if ((NULL == wifi_gui_scan_create_cell(row, number, 0, WIFI_SCAN_COL_NUM)) ||
-        (NULL == wifi_gui_scan_create_cell(row, ('\0' != message->ssid[0]) ? message->ssid : "<hidden>",
+        (NULL == wifi_gui_scan_create_cell(row, ('\0' != message->ssid[0]) 
+                                                ? (message->ssid) : ("<hidden>"),
                                            WIFI_SCAN_COL_NUM, WIFI_SCAN_COL_SSID)) ||
         (NULL == wifi_gui_scan_create_cell(row, band_text, 
-                                           WIFI_SCAN_COL_NUM + WIFI_SCAN_COL_SSID, WIFI_SCAN_COL_BAND)) ||
+                                           WIFI_SCAN_COL_NUM + WIFI_SCAN_COL_SSID, 
+                                           WIFI_SCAN_COL_BAND)) ||
         (NULL == wifi_gui_scan_create_cell(row, rssi,
-                                           WIFI_SCAN_COL_NUM + WIFI_SCAN_COL_SSID + WIFI_SCAN_COL_BAND,
+                                           WIFI_SCAN_COL_NUM + WIFI_SCAN_COL_SSID + 
+                                           WIFI_SCAN_COL_BAND,
                                            WIFI_SCAN_COL_RSSI))) {
         lv_obj_delete(row);
         return;
@@ -189,7 +216,8 @@ static void wifi_gui_scan_add_result(const struct wifi_scan_message *message)
 
     lv_obj_remove_style_all(separator);
     lv_obj_set_size(separator, WIFI_SCAN_ROW_SEPARATOR_W, WIFI_SCAN_ROW_SEPARATOR_H);
-    lv_obj_set_pos(separator, WIFI_SCAN_ROW_SEPARATOR_X, WIFI_SCAN_ROW_HEIGHT - WIFI_SCAN_ROW_SEPARATOR_H);
+    lv_obj_set_pos(separator, WIFI_SCAN_ROW_SEPARATOR_X, 
+                   WIFI_SCAN_ROW_HEIGHT - WIFI_SCAN_ROW_SEPARATOR_H);
     lv_obj_set_style_bg_color(separator, lv_color_hex(SAMUS_GREEN), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(separator, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_clickable(separator, false);
@@ -266,6 +294,10 @@ static int wifi_gui_scan_create_header(lv_color_t accent)
     return 0;
 }
 
+
+/*****************************************************************************
+                           INTERFACE IMPLEMENTATION
+*****************************************************************************/
 int gui_wifi_scan_init(lv_obj_t *screen, lv_color_t accent)
 {
     lv_obj_t *label = NULL;
@@ -286,7 +318,8 @@ int gui_wifi_scan_init(lv_obj_t *screen, lv_color_t accent)
     }
 
     lv_obj_set_size(refresh_button, WIFI_SCAN_REFRESH_WIDTH, WIFI_SCAN_REFRESH_HEIGHT);
-    lv_obj_align(refresh_button, LV_ALIGN_TOP_LEFT, WIFI_SCAN_REFRESH_OFFSET, WIFI_SCAN_REFRESH_OFFSET);
+    lv_obj_align(refresh_button, LV_ALIGN_BOTTOM_RIGHT, WIFI_SCAN_REFRESH_OFFSET_X,
+                 WIFI_SCAN_REFRESH_OFFSET_Y);
     lv_obj_set_style_bg_opa(refresh_button, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_shadow_width(refresh_button, 0, LV_PART_MAIN);
     lv_obj_set_style_border_width(refresh_button, 0, LV_PART_MAIN);
@@ -316,9 +349,10 @@ int gui_wifi_scan_init(lv_obj_t *screen, lv_color_t accent)
     if (NULL == scan_status) {
         return -ENOMEM;
     }
+    
     lv_label_set_text(scan_status, "Ready");
     lv_obj_set_style_text_color(scan_status, accent, LV_PART_MAIN);
-    lv_obj_align(scan_status, LV_ALIGN_BOTTOM_LEFT, 12, -5);
+    lv_obj_align(scan_status, LV_ALIGN_BOTTOM_LEFT, WIFI_STATUS_OFFSET_X, WIFI_STATUS_OFFSET_Y);
 
     net_mgmt_init_event_callback(&wifi_scan_callback, wifi_gui_scan_event_handler,
                                  NET_EVENT_WIFI_SCAN_RESULT | NET_EVENT_WIFI_SCAN_DONE);
@@ -389,7 +423,8 @@ void gui_wifi_scan_process(void)
                 lv_obj_set_clickable(refresh_button, true);
 
                 if (0 != message.status) {
-                    (void)snprintf(status_text, sizeof(status_text), "Scan failed: %d", message.status);
+                    (void)snprintf(status_text, sizeof(status_text), 
+                                   "Scan failed: %d", message.status);
                 }
                 else {
                     (void)snprintf(status_text, sizeof(status_text),

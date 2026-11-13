@@ -1,3 +1,6 @@
+/*****************************************************************************
+                                    INCLUDES
+*****************************************************************************/
 #include <errno.h>
 
 #include <lvgl.h>
@@ -6,6 +9,10 @@
 #include <gui_wifi_scan.h>
 #include <backlight.h>
 
+
+/*****************************************************************************
+                          PRIVATE DEFINES / MACROS
+*****************************************************************************/
 #define WIFI_BUTTON_WIDTH       (130)
 #define WIFI_BUTTON_HEIGHT      (45)
 #define WIFI_BUTTON_OFFSET_X    (80)
@@ -18,6 +25,10 @@
 
 #define WIFI_SCREEN_FADE_MS     (500U)
 
+
+/*****************************************************************************
+                     PRIVATE STRUCTS / ENUMS / VARIABLES
+*****************************************************************************/
 static lv_obj_t *scan_screen = NULL;
 static lv_obj_t *register_screen = NULL;
 
@@ -28,6 +39,14 @@ static bool fade_screen_loaded = false;
 
 static uint32_t fade_start_brightness = 0U;
 
+
+/*****************************************************************************
+                         PRIVATE FUNCTION DECLARATIONS
+*****************************************************************************/
+
+/*****************************************************************************
+                       PRIVATE FUNCTION IMPLEMENTATIONS
+*****************************************************************************/
 static void wifi_gui_fade_exec(void *obj, int32_t brightness)
 {
     (void)obj;
@@ -168,6 +187,7 @@ static lv_obj_t *wifi_gui_create_screen(lv_obj_t *home, const char *title,
 
     lv_label_set_text(label, title);
     lv_obj_set_style_text_color(label, accent, LV_PART_MAIN);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_align(label, LV_ALIGN_TOP_MID, 0, WIFI_TITLE_OFFSET_Y);
 
     lv_obj_t *close = wifi_gui_create_button(screen, "X", home, accent, background);
@@ -182,6 +202,10 @@ static lv_obj_t *wifi_gui_create_screen(lv_obj_t *home, const char *title,
     return screen;
 }
 
+
+/*****************************************************************************
+                           INTERFACE IMPLEMENTATION
+*****************************************************************************/
 int gui_wifi_init(lv_obj_t *screen, lv_color_t background, lv_color_t accent)
 {
     lv_obj_t *scan_button = NULL;

@@ -1,3 +1,6 @@
+/*****************************************************************************
+                                    INCLUDES
+*****************************************************************************/
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
@@ -5,12 +8,15 @@
 
 #include <display.h>
 #include <backlight.h>
-#include <performance.h>
 #include <theme.h>
 
 #include <gui_wifi.h>
 #include <gui_wifi_scan.h>
 
+
+/*****************************************************************************
+                          PRIVATE DEFINES / MACROS
+*****************************************************************************/
 LOG_MODULE_REGISTER(app_main, LOG_LEVEL_INF);
 
 #define MAIN_LOOP_PERIOD_MS   (10U)
@@ -18,21 +24,28 @@ LOG_MODULE_REGISTER(app_main, LOG_LEVEL_INF);
 #define ENABLE_BTN_ANIM       (true)
 
 
+/*****************************************************************************
+                     PRIVATE STRUCTS / ENUMS / VARIABLES
+*****************************************************************************/
+
+/*****************************************************************************
+                         PRIVATE FUNCTION DECLARATIONS
+*****************************************************************************/
+
+/*****************************************************************************
+                       PRIVATE FUNCTION IMPLEMENTATIONS
+*****************************************************************************/
+
+/*****************************************************************************
+                           INTERFACE IMPLEMENTATION
+*****************************************************************************/
 int main(void)
 {
     int ret = 0;
-    uint32_t start_cycles = 0U;
-    uint32_t elapsed_cycles = 0U;
 
     ret = app_display_init(lv_color_hex(CHOZO_DARK_BLUE));
     if (0 != ret) {
         LOG_ERR("Display initialization failed: %d", ret);
-        return 0;
-    }
-
-    ret = performance_init(lv_screen_active(), PERF_PRINT_REPORT);
-    if (0 != ret) {
-        LOG_ERR("Performance initialization failed: %d", ret);
         return 0;
     }
 
@@ -63,14 +76,7 @@ int main(void)
     while (true) {
         gui_wifi_scan_process();
 
-        start_cycles = k_cycle_get_32();
-
         (void)lv_timer_handler();
-
-        elapsed_cycles = k_cycle_get_32() - start_cycles;
-        performance_record_lvgl_handler(elapsed_cycles);
-        performance_report();
-
         k_sleep(K_MSEC(MAIN_LOOP_PERIOD_MS));
     }
 }

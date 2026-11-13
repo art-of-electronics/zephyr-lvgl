@@ -1,3 +1,6 @@
+/*****************************************************************************
+                                    INCLUDES
+*****************************************************************************/
 #include <backlight.h>
 
 #include <zephyr/device.h>
@@ -6,6 +9,10 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
+
+/*****************************************************************************
+                          PRIVATE DEFINES / MACROS
+*****************************************************************************/
 LOG_MODULE_REGISTER(backlight, LOG_LEVEL_INF);
 
 #define BACKLIGHT_NODE DT_NODELABEL(lcd_backlight)
@@ -13,12 +20,24 @@ LOG_MODULE_REGISTER(backlight, LOG_LEVEL_INF);
 #define BACKLIGHT_HIGH_PERCENT  (85U)
 #define BACKLIGHT_PERCENT_MAX   (100U)
 
+
+/*****************************************************************************
+                     PRIVATE STRUCTS / ENUMS / VARIABLES
+*****************************************************************************/
 static bool backlight_high = true;
 static lv_obj_t *backlight_button = NULL;
 static lv_obj_t *backlight_icon = NULL;
 
 static const struct pwm_dt_spec backlight = PWM_DT_SPEC_GET(BACKLIGHT_NODE);
 
+
+/*****************************************************************************
+                         PRIVATE FUNCTION DECLARATIONS
+*****************************************************************************/
+
+/*****************************************************************************
+                       PRIVATE FUNCTION IMPLEMENTATIONS
+*****************************************************************************/
 static void backlight_button_cb(lv_event_t *event)
 {
     int ret = 0;
@@ -37,6 +56,10 @@ static void backlight_button_cb(lv_event_t *event)
     lv_label_set_text(backlight_icon, (true == backlight_high) ? (LV_SYMBOL_EYE_OPEN) : (LV_SYMBOL_EYE_CLOSE));
 }
 
+
+/*****************************************************************************
+                           INTERFACE IMPLEMENTATION
+*****************************************************************************/
 int backlight_set_brightness(uint32_t percent)
 {
     uint32_t pulse_ns = 0U;
