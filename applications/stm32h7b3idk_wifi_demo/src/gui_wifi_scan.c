@@ -164,8 +164,7 @@ static void wifi_gui_scan_add_result(const struct wifi_scan_message *message)
     char rssi[WIFI_SCAN_RSSI_TEXT_SIZE] = {0};
     const char *band_text = "--";
 
-    if ((NULL == message) || (NULL == scan_list) ||
-        (WIFI_SCAN_MAX_RESULTS <= scan_count)) {
+    if ((NULL == message) || (NULL == scan_list) || (WIFI_SCAN_MAX_RESULTS <= scan_count)) {
         return;
     }
 
@@ -182,8 +181,7 @@ static void wifi_gui_scan_add_result(const struct wifi_scan_message *message)
     (void)snprintf(number, sizeof(number), "%u", (unsigned int)(scan_count + 1U));
     (void)snprintf(rssi, sizeof(rssi), "%d", (int)message->rssi);
     
-    if ((WIFI_CHANNEL_2_4_MIN <= message->channel) &&
-        (WIFI_CHANNEL_2_4_MAX >= message->channel)) {
+    if ((WIFI_CHANNEL_2_4_MIN <= message->channel) && (WIFI_CHANNEL_2_4_MAX >= message->channel)) {
         band_text = "2.4GHz";
     }
     else if (WIFI_CHANNEL_2_4_MAX < message->channel) {
@@ -252,6 +250,7 @@ static int wifi_gui_scan_create_header(lv_color_t accent)
         WIFI_SCAN_COL_NUM, WIFI_SCAN_COL_SSID,
         WIFI_SCAN_COL_BAND, WIFI_SCAN_COL_RSSI
     };
+
     lv_obj_t *header = NULL;
     lv_obj_t *label = NULL;
     int32_t x = 0;
@@ -312,8 +311,7 @@ int gui_wifi_scan_init(lv_obj_t *screen, lv_color_t accent)
     }
 
     lv_obj_set_size(refresh_button, WIFI_SCAN_REFRESH_WIDTH, WIFI_SCAN_REFRESH_HEIGHT);
-    lv_obj_align(refresh_button, LV_ALIGN_BOTTOM_RIGHT, WIFI_SCAN_REFRESH_OFFSET_X,
-                 WIFI_SCAN_REFRESH_OFFSET_Y);
+    lv_obj_align(refresh_button, LV_ALIGN_BOTTOM_RIGHT, WIFI_SCAN_REFRESH_OFFSET_X, WIFI_SCAN_REFRESH_OFFSET_Y);
     lv_obj_set_style_bg_opa(refresh_button, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_shadow_width(refresh_button, 0, LV_PART_MAIN);
     lv_obj_set_style_border_width(refresh_button, 0, LV_PART_MAIN);
@@ -419,8 +417,7 @@ void gui_wifi_scan_process(void)
                 if (0 != message.status) {
                     (void)snprintf(status_text, sizeof(status_text), 
                                    "Scan failed: %d", message.status);
-                }
-                else {
+                } else {
                     (void)snprintf(status_text, sizeof(status_text),
                                    "Found %u networks", (unsigned int)scan_count);
                 }

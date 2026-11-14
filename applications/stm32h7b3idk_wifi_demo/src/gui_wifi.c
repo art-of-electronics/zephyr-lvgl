@@ -49,6 +49,8 @@ static lv_obj_t *fade_overlay = NULL;
 static lv_obj_t *fade_target = NULL;
 static lv_obj_t *fade_source = NULL;
 static bool fade_screen_loaded = false;
+static gui_wifi_content_callback_t fade_content_callback = NULL;
+static bool fade_content_transition = false;
 
 static lv_obj_t *wifi_mac_label = NULL;
 static lv_obj_t *wifi_ip_label = NULL;
@@ -68,14 +70,23 @@ static uint32_t fade_start_brightness = 0U;
 static void gui_wifi_fade_exec(void *obj, int32_t brightness)
 {
     (void)obj;
+
     (void)backlight_set_brightness((uint32_t)brightness);
 
-    if ((true != fade_screen_loaded) &&
-        (0 == brightness) && (NULL != fade_target)) {
+    if ((false == fade_screen_loaded) && (0 == brightness)) {
         fade_screen_loaded = true;
-        lv_screen_load(fade_target);
+
+        if (true == fade_content_transition) {
+            if (NULL != fade_content_callback) {
+                fade_content_callback();
+            }
+        }
+        else if (NULL != fade_target) {
+            lv_screen_load(fade_target);
+        }
     }
 }
+
 
 static void gui_wifi_fade_completed(lv_anim_t *anim)
 {
@@ -86,6 +97,17 @@ static void gui_wifi_fade_completed(lv_anim_t *anim)
     if (NULL != fade_overlay) {
         lv_obj_delete(fade_overlay);
         fade_overlay = NULL;
+    }
+
+    if (true == fade_content_transition) {
+        fade_content_transition = false;
+        fade_content_callback = NULL;
+
+        fade_target = NULL;
+        fade_source = NULL;
+        fade_screen_loaded = false;
+
+        return;
     }
 
     fade_target = NULL;
@@ -110,39 +132,34 @@ static void gui_wifi_fade_completed(lv_anim_t *anim)
     }
 }
 
-static void gui_wifi_switch_screen(lv_obj_t *target)
+static bool gui_wifi_start_fade(void)
 {
     lv_anim_t anim;
 
-    if ((NULL == target) || (NULL != fade_overlay) ||
-        (target == lv_screen_active())) {
-        return;
+    if (NULL != fade_overlay) {
+        return false;
     }
 
     fade_start_brightness = backlight_get_brightness();
+    fade_screen_loaded = false;
 
     fade_overlay = lv_obj_create(lv_layer_top());
     if (NULL == fade_overlay) {
-        lv_screen_load(target);
-        return;
+        return false;
     }
 
-    fade_target = target;
-    fade_screen_loaded = false;
-    fade_source = lv_screen_active();
-
     lv_obj_remove_style_all(fade_overlay);
+
     lv_obj_set_size(fade_overlay, LV_PCT(100), LV_PCT(100));
     lv_obj_set_pos(fade_overlay, 0, 0);
 
     lv_obj_set_scrollable(fade_overlay, false);
     lv_obj_set_clickable(fade_overlay, true);
 
-    lv_obj_set_style_bg_opa(fade_overlay, LV_OPA_TRANSP, LV_PART_MAIN);
-    
     lv_anim_init(&anim);
     lv_anim_set_var(&anim, fade_overlay);
     lv_anim_set_exec_cb(&anim, gui_wifi_fade_exec);
+
     lv_anim_set_values(&anim, (int32_t)fade_start_brightness, 0);
     lv_anim_set_duration(&anim, WIFI_SCREEN_FADE_MS);
     lv_anim_set_playback_duration(&anim, WIFI_SCREEN_FADE_MS);
@@ -152,14 +169,56 @@ static void gui_wifi_switch_screen(lv_obj_t *target)
 
     if (NULL == lv_anim_start(&anim)) {
         lv_obj_delete(fade_overlay);
-
         fade_overlay = NULL;
+
+        return false;
+    }
+
+    return true;
+}
+
+static void gui_wifi_switch_screen(lv_obj_t *target)
+{
+    if ((NULL == target) || (NULL != fade_overlay) || (target == lv_screen_active())) {
+        return;
+    }
+
+    fade_target = target;
+    fade_source = lv_screen_active();
+
+    fade_content_transition = false;
+    fade_content_callback = NULL;
+
+    if (false == gui_wifi_start_fade()) {
         fade_target = NULL;
-        fade_screen_loaded = false;
+        fade_source = NULL;
 
         lv_screen_load(target);
-        (void)backlight_set_brightness(fade_start_brightness);
     }
+}
+
+bool gui_wifi_transition_content(gui_wifi_content_callback_t callback)
+{
+    if ((NULL == callback) || (NULL != fade_overlay)) {
+        return false;
+    }
+
+    fade_target = NULL;
+    fade_source = NULL;
+
+    fade_content_transition = true;
+    fade_content_callback = callback;
+
+    if (false == gui_wifi_start_fade()) {
+        fade_content_transition = false;
+        fade_content_callback = NULL;
+
+        callback();
+
+        return false;
+    }
+
+    return true;
 }
 
 static void gui_wifi_navigate(lv_event_t *event)
@@ -267,8 +326,7 @@ static void wifi_gui_update_info(void)
     if (NULL != wifi_mac_label) {
         if (0 == wifi_connection_get_mac(mac, sizeof(mac))) {
             (void)snprintf(text, sizeof(text), "MAC: %s", mac);
-        }
-        else {
+        } else {
             (void)snprintf(text, sizeof(text), "MAC: --");
         }
 
@@ -278,8 +336,7 @@ static void wifi_gui_update_info(void)
     if (NULL != wifi_ip_label) {
         if (0 == wifi_connection_get_ipv4(ip, sizeof(ip))) {
             (void)snprintf(text, sizeof(text), "IP: %s", ip);
-        }
-        else {
+        } else {
             (void)snprintf(text, sizeof(text), "IP: --");
         }
 

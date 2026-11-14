@@ -37,4 +37,13 @@ int gui_wifi_init(lv_obj_t *screen, lv_color_t background, lv_color_t accent);
  */
 void gui_wifi_process(void);
 
+typedef void (*gui_wifi_content_callback_t)(void);
+
+/**
+ * @brief Animate a content change using the display backlight.
+ * @param [in] callback Function executed with backlight brightness at zero.
+ * @return true if transition was started, false otherwise.
+ */
+bool gui_wifi_transition_content(gui_wifi_content_callback_t callback);
+
 #endif // GUI_WIFI_H

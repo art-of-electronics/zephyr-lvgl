@@ -6,6 +6,7 @@
 
 #include <lvgl.h>
 #include <theme.h>
+#include <gui_wifi.h>
 #include <gui_wifi_register.h>
 #include <wifi_connection.h>
 
@@ -54,6 +55,8 @@ static lv_obj_t *register_status = NULL;
 static lv_obj_t *register_action_button = NULL;
 static lv_obj_t *register_action_label = NULL;
 
+static bool register_layout_connected = false;
+
 
 /*****************************************************************************
                          PRIVATE FUNCTION DECLARATIONS
@@ -97,6 +100,49 @@ static void gui_wifi_register_keyboard_event(lv_event_t *event)
     }
 }
 
+static bool wifi_gui_register_is_connected_layout(void)
+{
+    enum wifi_connection_state state = wifi_connection_get_state();
+
+    return ((WIFI_CONNECTION_CONNECTED == state) || (WIFI_CONNECTION_DISCONNECTING == state));
+}
+
+static void wifi_gui_register_apply_layout(bool connected)
+{
+    if ((NULL == ssid_textarea) || (NULL == password_textarea) ||
+        (NULL == register_keyboard) || (NULL == register_action_button) ||
+        (NULL == register_action_label)) {
+        return;
+    }
+
+    lv_obj_set_hidden(ssid_textarea, connected);
+    lv_obj_set_hidden(password_textarea, connected);
+    lv_obj_set_hidden(register_keyboard, connected);
+
+    if (true == connected) {
+        lv_label_set_text(register_action_label, "Disconnect");
+
+        lv_obj_set_pos(register_action_button, WIFI_REGISTER_SSID_X, WIFI_REGISTER_FIELDS_Y);
+        lv_obj_set_width(register_action_button, WIFI_REGISTER_DISCONNECT_WIDTH);
+    } else {
+        lv_label_set_text(register_action_label, "Connect");
+
+        lv_obj_set_pos(register_action_button, WIFI_REGISTER_CONNECT_X, WIFI_REGISTER_FIELDS_Y);
+        lv_obj_set_width(register_action_button, WIFI_REGISTER_CONNECT_WIDTH);
+    }
+
+    lv_obj_center(register_action_label);
+
+    register_layout_connected = connected;
+}
+
+static void wifi_gui_register_update_layout(void)
+{
+    bool connected = wifi_gui_register_is_connected_layout();
+
+    wifi_gui_register_apply_layout(connected);
+}
+
 static void gui_wifi_register_refresh(void)
 {
     enum wifi_connection_state state = wifi_connection_get_state();
@@ -110,26 +156,7 @@ static void gui_wifi_register_refresh(void)
         return;
     }
 
-    lv_obj_set_hidden(ssid_textarea, connected);
-    lv_obj_set_hidden(password_textarea, connected);
-    lv_obj_set_hidden(register_keyboard, connected);
-
-    lv_obj_set_state(register_action_button, LV_STATE_DISABLED, busy);
-
-    if (true == connected) {
-        lv_label_set_text(register_action_label, "Disconnect");
-        lv_obj_set_pos(register_action_button, WIFI_REGISTER_SSID_X, 
-                       WIFI_REGISTER_FIELDS_Y);
-        lv_obj_set_width(register_action_button, WIFI_REGISTER_DISCONNECT_WIDTH);
-    }
-    else {
-        lv_label_set_text(register_action_label, "Connect");
-        lv_obj_set_pos(register_action_button, WIFI_REGISTER_CONNECT_X, WIFI_REGISTER_FIELDS_Y);
-        lv_obj_set_width(register_action_button, WIFI_REGISTER_CONNECT_WIDTH);
-    }
-
-    lv_obj_center(register_action_label);
-
+    // Update connection status immediately.
     switch (state) {
     case WIFI_CONNECTION_CONNECTED:
         gui_wifi_register_set_status("Connected");
@@ -152,6 +179,16 @@ static void gui_wifi_register_refresh(void)
         gui_wifi_register_set_status("Disconnected");
         break;
     }
+
+    // Update layout immediately when Register is not active.
+    if (register_screen != lv_screen_active()) {
+        wifi_gui_register_apply_layout(connected);
+    }
+    else if (register_layout_connected != connected) {
+        (void)gui_wifi_transition_content(wifi_gui_register_update_layout);
+    }
+
+    lv_obj_set_state(register_action_button, LV_STATE_DISABLED, busy);
 }
 
 static void gui_wifi_register_connect_event(lv_event_t *event)
@@ -177,8 +214,7 @@ static void gui_wifi_register_connect_event(lv_event_t *event)
         return;
     }
 
-    if ((WIFI_CONNECTION_CONNECTING == state) ||
-        (WIFI_CONNECTION_DISCONNECTING == state)) {
+    if ((WIFI_CONNECTION_CONNECTING == state) || (WIFI_CONNECTION_DISCONNECTING == state)) {
         return;
     }
 
@@ -352,8 +388,7 @@ void gui_wifi_register_close(void)
         lv_textarea_set_text(password_textarea, "");
     }
 
-    if ((NULL != register_keyboard) &&
-        (NULL != ssid_textarea)) {
+    if ((NULL != register_keyboard) && (NULL != ssid_textarea)) {
         lv_keyboard_set_textarea(register_keyboard, ssid_textarea);
     }
 

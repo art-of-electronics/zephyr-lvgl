@@ -78,7 +78,7 @@ static void wifi_connection_event_handler(struct net_mgmt_event_callback *cb,
     }
     else if (NET_EVENT_WIFI_DISCONNECT_RESULT == event) {
         message.type = WIFI_CONNECTION_EVENT_DISCONNECTED;
-    }
+    } 
     else {
         return;
     }
@@ -157,8 +157,7 @@ int wifi_connection_connect(const char *ssid, const char *password)
     ret = net_mgmt(NET_REQUEST_WIFI_CONNECT, wifi_iface, &params, sizeof(params));
     if (0 == ret) {
         connection_state = WIFI_CONNECTION_CONNECTING;
-    }
-    else {
+    } else {
         connection_state = WIFI_CONNECTION_FAILED;
     }
 
