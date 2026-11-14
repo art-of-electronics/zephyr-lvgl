@@ -60,23 +60,6 @@ static void backlight_button_cb(lv_event_t *event)
 /*****************************************************************************
                            INTERFACE IMPLEMENTATION
 *****************************************************************************/
-int backlight_set_brightness(uint32_t percent)
-{
-    uint32_t pulse_ns = 0U;
-
-    if (BACKLIGHT_PERCENT_MAX < percent) {
-        return -EINVAL;
-    }
-
-    pulse_ns = (uint32_t)(((uint64_t)backlight.period * percent) / BACKLIGHT_PERCENT_MAX);
-    return pwm_set_dt(&backlight, backlight.period, pulse_ns);
-}
-
-uint32_t backlight_get_brightness(void)
-{
-    return (true == backlight_high) ? (BACKLIGHT_HIGH_PERCENT) : (BACKLIGHT_LOW_PERCENT);
-}
-
 void backlight_button_create(lv_obj_t *screen, backlight_btn_t colors, bool enable_anim)
 {
     backlight_button = lv_button_create(screen);
@@ -117,4 +100,21 @@ int backlight_init(void)
     }
 
     return ret;
+}
+
+int backlight_set_brightness(uint32_t percent)
+{
+    uint32_t pulse_ns = 0U;
+
+    if (BACKLIGHT_PERCENT_MAX < percent) {
+        return -EINVAL;
+    }
+
+    pulse_ns = (uint32_t)(((uint64_t)backlight.period * percent) / BACKLIGHT_PERCENT_MAX);
+    return pwm_set_dt(&backlight, backlight.period, pulse_ns);
+}
+
+uint32_t backlight_get_brightness(void)
+{
+    return (true == backlight_high) ? (BACKLIGHT_HIGH_PERCENT) : (BACKLIGHT_LOW_PERCENT);
 }

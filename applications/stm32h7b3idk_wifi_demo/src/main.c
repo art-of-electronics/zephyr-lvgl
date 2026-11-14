@@ -20,9 +20,9 @@
 *****************************************************************************/
 LOG_MODULE_REGISTER(app_main, LOG_LEVEL_INF);
 
-#define MAIN_LOOP_PERIOD_MS   (10U)
-#define PERF_PRINT_REPORT     (false)
-#define ENABLE_BTN_ANIM       (true)
+#define MAIN_LOOP_PERIOD_MS (10U)
+#define PERF_PRINT_REPORT   (false)
+#define ENABLE_BTN_ANIM     (true)
 
 
 /*****************************************************************************
@@ -76,7 +76,7 @@ int main(void)
 
     while (true) {
         gui_wifi_scan_process();
-        gui_wifi_register_process();
+        gui_wifi_process();
 
         (void)lv_timer_handler();
         k_sleep(K_MSEC(MAIN_LOOP_PERIOD_MS));

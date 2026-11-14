@@ -13,32 +13,34 @@
 /*****************************************************************************
                           PRIVATE DEFINES / MACROS
 *****************************************************************************/
-#define WIFI_REGISTER_SSID_X                 (15)
-#define WIFI_REGISTER_PASSWORD_X             (210)
-#define WIFI_REGISTER_CONNECT_X              (375)
-#define WIFI_REGISTER_FIELDS_Y               (55)
-#define WIFI_REGISTER_SSID_WIDTH             (185)
-#define WIFI_REGISTER_PASSWORD_WIDTH         (155)
-#define WIFI_REGISTER_CONNECT_WIDTH          (90)
-#define WIFI_REGISTER_FIELDS_HEIGHT          (34)
+#define WIFI_REGISTER_SSID_X                (15)
+#define WIFI_REGISTER_PASSWORD_X            (210)
+#define WIFI_REGISTER_CONNECT_X             (375)
+#define WIFI_REGISTER_FIELDS_Y              (55)
+#define WIFI_REGISTER_SSID_WIDTH            (185)
+#define WIFI_REGISTER_PASSWORD_WIDTH        (155)
+#define WIFI_REGISTER_CONNECT_WIDTH         (90)
+#define WIFI_REGISTER_FIELDS_HEIGHT         (34)
 
-#define WIFI_REGISTER_STATUS_X               (15)
-#define WIFI_REGISTER_STATUS_Y               (96)
-#define WIFI_REGISTER_STATUS_WIDTH           (450)
+#define WIFI_REGISTER_STATUS_X              (15)
+#define WIFI_REGISTER_STATUS_Y              (96)
+#define WIFI_REGISTER_STATUS_WIDTH          (450)
 
-#define WIFI_REGISTER_KEYBOARD_X             (10)
-#define WIFI_REGISTER_KEYBOARD_Y             (115)
-#define WIFI_REGISTER_KEYBOARD_WIDTH         (460)
-#define WIFI_REGISTER_KEYBOARD_HEIGHT        (147)
+#define WIFI_REGISTER_KEYBOARD_X            (10)
+#define WIFI_REGISTER_KEYBOARD_Y            (115)
+#define WIFI_REGISTER_KEYBOARD_WIDTH        (460)
+#define WIFI_REGISTER_KEYBOARD_HEIGHT       (147)
 
-#define WIFI_REGISTER_SSID_MAX_LENGTH        (32U)
-#define WIFI_REGISTER_PASSPHRASE_MAX_LENGTH  (63U)
-#define WIFI_REGISTER_FIELD_PAD_H            (7)
-#define WIFI_REGISTER_FIELD_PAD_V            (6)
-#define WIFI_REGISTER_KEYBOARD_PAD           (2)
-#define WIFI_REGISTER_KEYBOARD_GAP           (2)
-#define WIFI_REGISTER_KEYBOARD_RADIUS        (3)
-#define WIFI_REGISTER_FIELD_RADIUS           (4)
+#define WIFI_REGISTER_SSID_MAX_LENGTH       (32U)
+#define WIFI_REGISTER_PASSPHRASE_MAX_LENGTH (63U)
+#define WIFI_REGISTER_FIELD_PAD_H           (7)
+#define WIFI_REGISTER_FIELD_PAD_V           (6)
+#define WIFI_REGISTER_KEYBOARD_PAD          (2)
+#define WIFI_REGISTER_KEYBOARD_GAP          (2)
+#define WIFI_REGISTER_KEYBOARD_RADIUS       (3)
+#define WIFI_REGISTER_FIELD_RADIUS          (4)
+
+#define WIFI_REGISTER_DISCONNECT_WIDTH      (130)
 
 
 /*****************************************************************************
@@ -49,6 +51,8 @@ static lv_obj_t *ssid_textarea = NULL;
 static lv_obj_t *password_textarea = NULL;
 static lv_obj_t *register_keyboard = NULL;
 static lv_obj_t *register_status = NULL;
+static lv_obj_t *register_action_button = NULL;
+static lv_obj_t *register_action_label = NULL;
 
 
 /*****************************************************************************
@@ -93,13 +97,88 @@ static void gui_wifi_register_keyboard_event(lv_event_t *event)
     }
 }
 
+static void gui_wifi_register_refresh(void)
+{
+    enum wifi_connection_state state = wifi_connection_get_state();
+    bool connected = false;
+    bool busy = false;
+
+    connected = ((WIFI_CONNECTION_CONNECTED == state) || (WIFI_CONNECTION_DISCONNECTING == state));
+    busy = ((WIFI_CONNECTION_CONNECTING == state) || (WIFI_CONNECTION_DISCONNECTING == state));
+
+    if ((NULL == register_action_button) || (NULL == register_action_label)) {
+        return;
+    }
+
+    lv_obj_set_hidden(ssid_textarea, connected);
+    lv_obj_set_hidden(password_textarea, connected);
+    lv_obj_set_hidden(register_keyboard, connected);
+
+    lv_obj_set_state(register_action_button, LV_STATE_DISABLED, busy);
+
+    if (true == connected) {
+        lv_label_set_text(register_action_label, "Disconnect");
+        lv_obj_set_pos(register_action_button, WIFI_REGISTER_SSID_X, 
+                       WIFI_REGISTER_FIELDS_Y);
+        lv_obj_set_width(register_action_button, WIFI_REGISTER_DISCONNECT_WIDTH);
+    }
+    else {
+        lv_label_set_text(register_action_label, "Connect");
+        lv_obj_set_pos(register_action_button, WIFI_REGISTER_CONNECT_X, WIFI_REGISTER_FIELDS_Y);
+        lv_obj_set_width(register_action_button, WIFI_REGISTER_CONNECT_WIDTH);
+    }
+
+    lv_obj_center(register_action_label);
+
+    switch (state) {
+    case WIFI_CONNECTION_CONNECTED:
+        gui_wifi_register_set_status("Connected");
+        break;
+
+    case WIFI_CONNECTION_CONNECTING:
+        gui_wifi_register_set_status("Connecting...");
+        break;
+
+    case WIFI_CONNECTION_DISCONNECTING:
+        gui_wifi_register_set_status("Disconnecting...");
+        break;
+
+    case WIFI_CONNECTION_FAILED:
+        gui_wifi_register_set_status("Connection failed");
+        break;
+
+    case WIFI_CONNECTION_DISCONNECTED:
+    default:
+        gui_wifi_register_set_status("Disconnected");
+        break;
+    }
+}
+
 static void gui_wifi_register_connect_event(lv_event_t *event)
 {
+    enum wifi_connection_state state = WIFI_CONNECTION_DISCONNECTED;
     const char *ssid = NULL;
     const char *password = NULL;
     int ret = 0;
 
     if (LV_EVENT_CLICKED != lv_event_get_code(event)) {
+        return;
+    }
+
+    state = wifi_connection_get_state();
+    if (WIFI_CONNECTION_CONNECTED == state) {
+        ret = wifi_connection_disconnect();
+        if (0 != ret) {
+            gui_wifi_register_set_status("Disconnect request failed");
+            return;
+        }
+
+        gui_wifi_register_refresh();
+        return;
+    }
+
+    if ((WIFI_CONNECTION_CONNECTING == state) ||
+        (WIFI_CONNECTION_DISCONNECTING == state)) {
         return;
     }
 
@@ -119,25 +198,19 @@ static void gui_wifi_register_connect_event(lv_event_t *event)
     }
 
     ret = wifi_connection_connect(ssid, password);
-
     if (0 != ret) {
         gui_wifi_register_set_status("Connection request failed");
         return;
     }
 
-    gui_wifi_register_set_status("Connecting...");
+    gui_wifi_register_refresh();
 }
 
-static lv_obj_t *gui_wifi_register_create_textarea(lv_obj_t *screen,
-                                                   const char *placeholder,
-                                                   int32_t x,
-                                                   int32_t width,
-                                                   uint32_t max_length,
-                                                   bool password_mode,
-                                                   lv_color_t accent)
+static lv_obj_t *gui_wifi_register_create_textarea(lv_obj_t *screen, const char *placeholder,
+                                                   int32_t x, int32_t width, uint32_t max_length,
+                                                   bool password_mode, lv_color_t accent)
 {
     lv_obj_t *textarea = lv_textarea_create(screen);
-
     if (NULL == textarea) {
         return NULL;
     }
@@ -158,10 +231,8 @@ static lv_obj_t *gui_wifi_register_create_textarea(lv_obj_t *screen,
     lv_textarea_set_placeholder_text(textarea, placeholder);
     lv_textarea_set_max_length(textarea, max_length);
     lv_textarea_set_password_mode(textarea, password_mode);
-    lv_obj_add_event_cb(textarea, gui_wifi_register_textarea_event, 
-                        LV_EVENT_CLICKED, NULL);
-    lv_obj_add_event_cb(textarea, gui_wifi_register_textarea_event, 
-                        LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(textarea, gui_wifi_register_textarea_event, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(textarea, gui_wifi_register_textarea_event, LV_EVENT_FOCUSED, NULL);
 
     return textarea;
 }
@@ -172,12 +243,10 @@ static lv_obj_t *gui_wifi_register_create_textarea(lv_obj_t *screen,
 *****************************************************************************/
 int gui_wifi_register_init(lv_obj_t *screen, lv_color_t accent)
 {
-    lv_obj_t *connect_button = NULL;
-    lv_obj_t *connect_label = NULL;
-
     if (NULL == screen) {
         return -EINVAL;
     }
+
     if (NULL != register_screen) {
         return -EALREADY;
     }
@@ -198,28 +267,27 @@ int gui_wifi_register_init(lv_obj_t *screen, lv_color_t accent)
         return -ENOMEM;
     }
 
-    connect_button = lv_button_create(screen);
-    if (NULL == connect_button) {
+    register_action_button = lv_button_create(screen);
+    if (NULL == register_action_button) {
         return -ENOMEM;
     }
 
-    lv_obj_set_pos(connect_button, WIFI_REGISTER_CONNECT_X, WIFI_REGISTER_FIELDS_Y);
-    lv_obj_set_size(connect_button, WIFI_REGISTER_CONNECT_WIDTH, 
-                    WIFI_REGISTER_FIELDS_HEIGHT);
-    lv_obj_set_style_bg_color(connect_button, accent, LV_PART_MAIN);
-    lv_obj_set_style_shadow_width(connect_button, 0, LV_PART_MAIN);
-    lv_obj_set_style_radius(connect_button, WIFI_REGISTER_FIELD_RADIUS, LV_PART_MAIN);
-    lv_obj_add_event_cb(connect_button, gui_wifi_register_connect_event, 
-                        LV_EVENT_CLICKED, NULL);
+    lv_obj_set_pos(register_action_button, WIFI_REGISTER_CONNECT_X, WIFI_REGISTER_FIELDS_Y);
+    lv_obj_set_size(register_action_button, WIFI_REGISTER_CONNECT_WIDTH, WIFI_REGISTER_FIELDS_HEIGHT);
+    lv_obj_set_style_bg_color(register_action_button, accent, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(register_action_button, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(register_action_button, WIFI_REGISTER_FIELD_RADIUS, LV_PART_MAIN);
+    lv_obj_add_event_cb(register_action_button, gui_wifi_register_connect_event, LV_EVENT_CLICKED, NULL);
 
-    connect_label = lv_label_create(connect_button);
-    if (NULL == connect_label) {
+    register_action_label = lv_label_create(register_action_button);
+    if (NULL == register_action_label) {
         return -ENOMEM;
     }
-    lv_label_set_text(connect_label, "Connect");
-    lv_obj_set_style_text_color(connect_label, lv_color_hex(CHOZO_DARK_BLUE), LV_PART_MAIN);
-    lv_obj_set_style_text_font(connect_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_center(connect_label);
+
+    lv_label_set_text(register_action_label, "Connect");
+    lv_obj_set_style_text_color(register_action_label, lv_color_hex(CHOZO_DARK_BLUE), LV_PART_MAIN);
+    lv_obj_set_style_text_font(register_action_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_center(register_action_label);
 
     register_status = lv_label_create(screen);
     if (NULL == register_status) {
@@ -237,13 +305,9 @@ int gui_wifi_register_init(lv_obj_t *screen, lv_color_t accent)
         return -ENOMEM;
     }
 
-    lv_obj_set_size(register_keyboard, WIFI_REGISTER_KEYBOARD_WIDTH,
-                    WIFI_REGISTER_KEYBOARD_HEIGHT);
-
-    lv_obj_align(register_keyboard, LV_ALIGN_TOP_LEFT,
-                 WIFI_REGISTER_KEYBOARD_X, WIFI_REGISTER_KEYBOARD_Y);
-    lv_obj_set_size(register_keyboard, WIFI_REGISTER_KEYBOARD_WIDTH,
-                    WIFI_REGISTER_KEYBOARD_HEIGHT);
+    lv_obj_set_size(register_keyboard, WIFI_REGISTER_KEYBOARD_WIDTH, WIFI_REGISTER_KEYBOARD_HEIGHT);
+    lv_obj_align(register_keyboard, LV_ALIGN_TOP_LEFT, WIFI_REGISTER_KEYBOARD_X, WIFI_REGISTER_KEYBOARD_Y);
+    lv_obj_set_size(register_keyboard, WIFI_REGISTER_KEYBOARD_WIDTH, WIFI_REGISTER_KEYBOARD_HEIGHT);
     lv_obj_set_style_bg_color(register_keyboard, lv_color_hex(CHOZO_DARK_BLUE), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(register_keyboard, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_color(register_keyboard, accent, LV_PART_MAIN);
@@ -260,18 +324,26 @@ int gui_wifi_register_init(lv_obj_t *screen, lv_color_t accent)
     lv_obj_set_style_text_font(register_keyboard, &lv_font_montserrat_14, LV_PART_ITEMS);
 
     lv_keyboard_set_textarea(register_keyboard, ssid_textarea);
-    lv_obj_add_event_cb(register_keyboard, gui_wifi_register_keyboard_event, 
-                        LV_EVENT_READY, NULL);
-    lv_obj_add_event_cb(register_keyboard, gui_wifi_register_keyboard_event, 
-                        LV_EVENT_CANCEL, NULL);
+    lv_obj_add_event_cb(register_keyboard, gui_wifi_register_keyboard_event, LV_EVENT_READY, NULL);
+    lv_obj_add_event_cb(register_keyboard, gui_wifi_register_keyboard_event, LV_EVENT_CANCEL, NULL);
 
     return 0;
 }
 
+void gui_wifi_register_open(void)
+{
+    gui_wifi_register_refresh();
+}
+
+void gui_wifi_register_process(void)
+{
+    if (true == wifi_connection_process()) {
+        gui_wifi_register_refresh();
+    }
+}
+
 void gui_wifi_register_close(void)
 {
-    enum wifi_connection_state state = WIFI_CONNECTION_DISCONNECTED;
-
     if (NULL != ssid_textarea) {
         lv_textarea_set_text(ssid_textarea, "");
     }
@@ -285,62 +357,5 @@ void gui_wifi_register_close(void)
         lv_keyboard_set_textarea(register_keyboard, ssid_textarea);
     }
 
-    state = wifi_connection_get_state();
-
-    switch (state) {
-    case WIFI_CONNECTION_CONNECTING:
-        gui_wifi_register_set_status("Connecting...");
-        break;
-
-    case WIFI_CONNECTION_CONNECTED:
-        gui_wifi_register_set_status("Connected");
-        break;
-
-    case WIFI_CONNECTION_DISCONNECTING:
-        gui_wifi_register_set_status("Disconnecting...");
-        break;
-
-    case WIFI_CONNECTION_FAILED:
-        gui_wifi_register_set_status("Connection failed");
-        break;
-
-    case WIFI_CONNECTION_DISCONNECTED:
-    default:
-        gui_wifi_register_set_status("Disconnected");
-        break;
-    }
-}
-
-void gui_wifi_register_process(void)
-{
-    enum wifi_connection_state state = WIFI_CONNECTION_DISCONNECTED;
-
-    if (false == wifi_connection_process()) {
-        return;
-    }
-
-    state = wifi_connection_get_state();
-
-    switch (state) {
-    case WIFI_CONNECTION_DISCONNECTED:
-        gui_wifi_register_set_status("Disconnected");
-        break;
-
-    case WIFI_CONNECTION_CONNECTING:
-        gui_wifi_register_set_status("Connecting...");
-        break;
-
-    case WIFI_CONNECTION_CONNECTED:
-        gui_wifi_register_set_status("Connected");
-        break;
-
-    case WIFI_CONNECTION_DISCONNECTING:
-        gui_wifi_register_set_status("Disconnecting...");
-        break;
-
-    case WIFI_CONNECTION_FAILED:
-    default:
-        gui_wifi_register_set_status("Connection failed");
-        break;
-    }
+    gui_wifi_register_refresh();
 }

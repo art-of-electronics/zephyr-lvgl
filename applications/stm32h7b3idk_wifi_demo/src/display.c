@@ -22,8 +22,8 @@
 *****************************************************************************/
 LOG_MODULE_REGISTER(app_display, LOG_LEVEL_INF);
 
-#define VERSION_TEXT_SIZE     (64U)
-#define VERSION_LABEL_Y_POS   (12)
+#define VERSION_TEXT_SIZE   (64U)
+#define VERSION_LABEL_Y_POS (12)
 
 
 /*****************************************************************************

@@ -38,6 +38,8 @@ The application uses the board's onboard ST-LINK debugger.
 
 ## Testing Wi-Fi module
 
+Enable all shell config
+
 ### Scan
 
 ```bash

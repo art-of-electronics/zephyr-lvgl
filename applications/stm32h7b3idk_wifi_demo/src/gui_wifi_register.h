@@ -23,14 +23,19 @@
 int gui_wifi_register_init(lv_obj_t *screen, lv_color_t accent);
 
 /**
- * @brief Clear the password and reset keyboard focus when leaving the screen.
+ * @brief Refresh the registration screen when entering it.
  */
-void gui_wifi_register_close(void);
+void gui_wifi_register_open(void);
 
 /**
  * @brief Process pending Wi-Fi connection events.
  * @note Must be called periodically from the LVGL thread.
  */
 void gui_wifi_register_process(void);
+
+/**
+ * @brief Clear the password and reset keyboard focus when leaving the screen.
+ */
+void gui_wifi_register_close(void);
 
 #endif // GUI_WIFI_REGISTER_H_

@@ -5,11 +5,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 
 #include <zephyr/kernel.h>
 #include <zephyr/net/net_if.h>
 #include <zephyr/net/net_mgmt.h>
 #include <zephyr/net/wifi_mgmt.h>
+#include <zephyr/net/net_ip.h>
+#include <zephyr/net/ethernet.h>
 
 #include <wifi_connection.h>
 
@@ -41,8 +44,7 @@ K_MSGQ_DEFINE(wifi_connection_queue, sizeof(struct wifi_connection_event),
 static struct net_mgmt_event_callback wifi_connection_callback;
 static struct net_if *wifi_iface = NULL;
 
-static enum wifi_connection_state connection_state =
-    WIFI_CONNECTION_DISCONNECTED;
+static enum wifi_connection_state connection_state = WIFI_CONNECTION_DISCONNECTED;
 
 static bool connection_initialized = false;
 
@@ -82,25 +84,6 @@ static void wifi_connection_event_handler(struct net_mgmt_event_callback *cb,
     }
 
     (void)k_msgq_put(&wifi_connection_queue, &message, K_NO_WAIT);
-}
-
-bool wifi_connection_process(void)
-{
-    struct wifi_connection_event message = {0};
-    enum wifi_connection_state previous = connection_state;
-
-    while (0 == k_msgq_get(&wifi_connection_queue, &message, K_NO_WAIT)) {
-        if (WIFI_CONNECTION_EVENT_CONNECTED == message.type) {
-            connection_state = (0 == message.status) ?
-                               (WIFI_CONNECTION_CONNECTED) : (WIFI_CONNECTION_FAILED);
-        }
-        else if (WIFI_CONNECTION_EVENT_DISCONNECTED == message.type) {
-            connection_state = (0 == message.status) ?
-                               (WIFI_CONNECTION_DISCONNECTED) : (WIFI_CONNECTION_FAILED);
-        }
-    }
-
-    return (previous != connection_state);
 }
 
 
@@ -202,7 +185,84 @@ int wifi_connection_disconnect(void)
     return ret;
 }
 
+bool wifi_connection_process(void)
+{
+    struct wifi_connection_event message = {0};
+    enum wifi_connection_state previous = connection_state;
+
+    while (0 == k_msgq_get(&wifi_connection_queue, &message, K_NO_WAIT)) {
+        if (WIFI_CONNECTION_EVENT_CONNECTED == message.type) {
+            connection_state = (0 == message.status) ? (WIFI_CONNECTION_CONNECTED) : (WIFI_CONNECTION_FAILED);
+        }
+        else if (WIFI_CONNECTION_EVENT_DISCONNECTED == message.type) {
+            connection_state = (0 == message.status) ? (WIFI_CONNECTION_DISCONNECTED) : (WIFI_CONNECTION_FAILED);
+        }
+    }
+
+    return (previous != connection_state);
+}
+
 enum wifi_connection_state wifi_connection_get_state(void)
 {
     return connection_state;
+}
+
+int wifi_connection_get_mac(char *buffer, size_t size)
+{
+    const struct net_linkaddr *link_addr = NULL;
+    const uint8_t *mac = NULL;
+
+    if ((NULL == buffer) || (WIFI_CONNECTION_MAC_TEXT_SIZE > size)) {
+        return -EINVAL;
+    }
+
+    if (NULL == wifi_iface) {
+        return -ENODEV;
+    }
+
+    link_addr = net_if_get_link_addr(wifi_iface);
+
+    if ((NULL == link_addr) || (NET_ETH_ADDR_LEN != link_addr->len)) {
+        return -ENODATA;
+    }
+
+    mac = link_addr->addr;
+
+    (void)snprintf(buffer, size,
+                   "%02X:%02X:%02X:%02X:%02X:%02X",
+                   (unsigned int)mac[0], (unsigned int)mac[1],
+                   (unsigned int)mac[2], (unsigned int)mac[3],
+                   (unsigned int)mac[4], (unsigned int)mac[5]);
+
+    return 0;
+}
+
+int wifi_connection_get_ipv4(char *buffer, size_t size)
+{
+    const struct net_in_addr *address = NULL;
+
+    if ((NULL == buffer) || (WIFI_CONNECTION_IPV4_TEXT_SIZE > size)) {
+        return -EINVAL;
+    }
+
+    buffer[0] = '\0';
+
+    if (NULL == wifi_iface) {
+        return -ENODEV;
+    }
+
+    if (WIFI_CONNECTION_CONNECTED != connection_state) {
+        return -ENOTCONN;
+    }
+
+    address = net_if_ipv4_get_global_addr(wifi_iface, NET_ADDR_PREFERRED);
+    if (NULL == address) {
+        return -ENODATA;
+    }
+
+    if (NULL == net_addr_ntop(NET_AF_INET, address, buffer, size)) {
+        return -EINVAL;
+    }
+
+    return 0;
 }

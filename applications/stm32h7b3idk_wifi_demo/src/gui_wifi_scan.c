@@ -47,13 +47,13 @@
 #define WIFI_SCAN_RSSI_TEXT_SIZE    (8U)
 #define WIFI_SCAN_STATUS_TEXT_SIZE  (40U)
 
-#define WIFI_STATUS_OFFSET_X      (12)
-#define WIFI_STATUS_OFFSET_Y      (-5)
+#define WIFI_STATUS_OFFSET_X        (12)
+#define WIFI_STATUS_OFFSET_Y        (-5)
 
-#define WIFI_SCAN_REFRESH_WIDTH         (90)
-#define WIFI_SCAN_REFRESH_HEIGHT        (24)
-#define WIFI_SCAN_REFRESH_OFFSET_X      (-10)
-#define WIFI_SCAN_REFRESH_OFFSET_Y      (-2)
+#define WIFI_SCAN_REFRESH_WIDTH     (90)
+#define WIFI_SCAN_REFRESH_HEIGHT    (24)
+#define WIFI_SCAN_REFRESH_OFFSET_X  (-10)
+#define WIFI_SCAN_REFRESH_OFFSET_Y  (-2)
 
 
 /*****************************************************************************
@@ -113,9 +113,7 @@ static void wifi_gui_scan_event_handler(struct net_mgmt_event_callback *cb,
         }
 
         result = (const struct wifi_scan_result *)cb->info;
-
-        ssid_length = (WIFI_SSID_MAX_LEN < result->ssid_length) 
-                       ? (WIFI_SSID_MAX_LEN) : (result->ssid_length);
+        ssid_length = (WIFI_SSID_MAX_LEN < result->ssid_length) ? (WIFI_SSID_MAX_LEN) : (result->ssid_length);
 
         message.type = WIFI_SCAN_MESSAGE_RESULT;
         message.channel = result->channel;
@@ -138,8 +136,7 @@ static void wifi_gui_scan_event_handler(struct net_mgmt_event_callback *cb,
     }
 }
 
-static lv_obj_t *wifi_gui_scan_create_cell(lv_obj_t *row, const char *text, 
-                                           int32_t x, int32_t width)
+static lv_obj_t *wifi_gui_scan_create_cell(lv_obj_t *row, const char *text, int32_t x, int32_t width)
 {
     lv_obj_t *label = NULL;
 
@@ -194,15 +191,13 @@ static void wifi_gui_scan_add_result(const struct wifi_scan_message *message)
     }
 
     if ((NULL == wifi_gui_scan_create_cell(row, number, 0, WIFI_SCAN_COL_NUM)) ||
-        (NULL == wifi_gui_scan_create_cell(row, ('\0' != message->ssid[0]) 
-                                                ? (message->ssid) : ("<hidden>"),
+        (NULL == wifi_gui_scan_create_cell(row, ('\0' != message->ssid[0]) ? (message->ssid) : ("<hidden>"),
                                            WIFI_SCAN_COL_NUM, WIFI_SCAN_COL_SSID)) ||
         (NULL == wifi_gui_scan_create_cell(row, band_text, 
                                            WIFI_SCAN_COL_NUM + WIFI_SCAN_COL_SSID, 
                                            WIFI_SCAN_COL_BAND)) ||
         (NULL == wifi_gui_scan_create_cell(row, rssi,
-                                           WIFI_SCAN_COL_NUM + WIFI_SCAN_COL_SSID + 
-                                           WIFI_SCAN_COL_BAND,
+                                           WIFI_SCAN_COL_NUM + WIFI_SCAN_COL_SSID + WIFI_SCAN_COL_BAND, 
                                            WIFI_SCAN_COL_RSSI))) {
         lv_obj_delete(row);
         return;
@@ -216,8 +211,7 @@ static void wifi_gui_scan_add_result(const struct wifi_scan_message *message)
 
     lv_obj_remove_style_all(separator);
     lv_obj_set_size(separator, WIFI_SCAN_ROW_SEPARATOR_W, WIFI_SCAN_ROW_SEPARATOR_H);
-    lv_obj_set_pos(separator, WIFI_SCAN_ROW_SEPARATOR_X, 
-                   WIFI_SCAN_ROW_HEIGHT - WIFI_SCAN_ROW_SEPARATOR_H);
+    lv_obj_set_pos(separator, WIFI_SCAN_ROW_SEPARATOR_X, WIFI_SCAN_ROW_HEIGHT - WIFI_SCAN_ROW_SEPARATOR_H);
     lv_obj_set_style_bg_color(separator, lv_color_hex(SAMUS_GREEN), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(separator, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_clickable(separator, false);

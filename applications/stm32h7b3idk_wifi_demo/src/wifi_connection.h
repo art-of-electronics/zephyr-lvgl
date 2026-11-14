@@ -5,11 +5,15 @@
                                     INCLUDES
 *****************************************************************************/
 #include <stdbool.h>
+#include <stddef.h>
 
 
 /*****************************************************************************
                        PUBLIC DEFINES / MACROS / ENUMS
 *****************************************************************************/
+#define WIFI_CONNECTION_MAC_TEXT_SIZE  (18U)
+#define WIFI_CONNECTION_IPV4_TEXT_SIZE (16U)
+
 /** @brief Wi-Fi connection states exposed to the application. */
 enum wifi_connection_state {
     WIFI_CONNECTION_DISCONNECTED = 0,
@@ -54,5 +58,22 @@ bool wifi_connection_process(void);
  * @brief Return the current connection state. 
  */
 enum wifi_connection_state wifi_connection_get_state(void);
+
+/**
+ * @brief Get the Wi-Fi interface MAC address.
+ * @param [out] buffer Output buffer.
+ * @param [out] size Output buffer size.
+ * @return 0 on success, negative errno otherwise.
+ */
+int wifi_connection_get_mac(char *buffer, size_t size);
+
+/**
+ * @brief Get the current IPv4 address.
+ *
+ * @param [out] buffer Output buffer.
+ * @param [out] size Output buffer size.
+ * @return 0 on success, negative errno otherwise.
+ */
+int wifi_connection_get_ipv4(char *buffer, size_t size);
 
 #endif // WIFI_CONNECTION_H_

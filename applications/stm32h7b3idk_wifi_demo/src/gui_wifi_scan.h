@@ -31,8 +31,7 @@ void gui_wifi_scan_start(void);
 
 /**
  * @brief Process pending Wi-Fi scan events.
- *
- * Must be called from the LVGL application thread.
+ * @note Must be called from the LVGL application thread.
  */
 void gui_wifi_scan_process(void);
 

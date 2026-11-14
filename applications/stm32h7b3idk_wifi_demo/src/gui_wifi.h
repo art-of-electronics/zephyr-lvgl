@@ -31,4 +31,10 @@
  */
 int gui_wifi_init(lv_obj_t *screen, lv_color_t background, lv_color_t accent);
 
+/**
+ * @brief Process Wi-Fi GUI state and network information.
+ * @note Must be called periodically from the LVGL thread.
+ */
+void gui_wifi_process(void);
+
 #endif // GUI_WIFI_H
