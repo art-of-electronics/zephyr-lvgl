@@ -1,3 +1,12 @@
+/**
+ * @file gui_wifi_scan.h
+ * @brief Wi-Fi network scanning and LVGL scan interface.
+ *
+ * Provides functions for discovering available wireless networks,
+ * processing asynchronous scan results, and displaying network
+ * information including SSID, frequency band, and signal strength.
+ */
+
 #ifndef GUI_WIFI_SCAN_H
 #define GUI_WIFI_SCAN_H
 

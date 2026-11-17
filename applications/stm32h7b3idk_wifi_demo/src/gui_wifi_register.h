@@ -1,5 +1,14 @@
-#ifndef GUI_WIFI_REGISTER_H_
-#define GUI_WIFI_REGISTER_H_
+/**
+ * @file gui_wifi_register.h
+ * @brief Wi-Fi connection registration and LVGL user interface.
+ *
+ * Provides functions for managing network credentials through
+ * an on-screen keyboard, initiating connection and disconnection,
+ * and updating the interface based on Wi-Fi connection states.
+ */
+
+#ifndef GUI_WIFI_REGISTER_H
+#define GUI_WIFI_REGISTER_H
 
 /*****************************************************************************
                                     INCLUDES
@@ -38,4 +47,4 @@ void gui_wifi_register_process(void);
  */
 void gui_wifi_register_close(void);
 
-#endif // GUI_WIFI_REGISTER_H_
+#endif // GUI_WIFI_REGISTER_H

@@ -8,6 +8,15 @@ Wi-Fi management is performed entirely through the graphical interface, without 
 
 ---
 
+
+## Screenshots
+
+| Home | Scan | Register |
+|:---:|:---:|:---:|
+| ![Home](doc/img/wifi_home.webp) | ![Scan](doc/img/wifi_scan.webp) | ![Register](doc/img/wifi_register.webp) |
+
+---
+
 ## Features
 
 ### Display and GUI

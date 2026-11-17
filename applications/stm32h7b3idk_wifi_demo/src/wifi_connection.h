@@ -1,5 +1,14 @@
-#ifndef WIFI_CONNECTION_H_
-#define WIFI_CONNECTION_H_
+/**
+ * @file wifi_connection.h
+ * @brief Wi-Fi connection management using Zephyr networking APIs.
+ *
+ * Provides functions for connecting to and disconnecting from
+ * wireless networks, monitoring connection states, and processing
+ * asynchronous Wi-Fi events.
+ */
+
+#ifndef WIFI_CONNECTION_H
+#define WIFI_CONNECTION_H
 
 /*****************************************************************************
                                     INCLUDES
@@ -76,4 +85,4 @@ int wifi_connection_get_mac(char *buffer, size_t size);
  */
 int wifi_connection_get_ipv4(char *buffer, size_t size);
 
-#endif // WIFI_CONNECTION_H_
+#endif // WIFI_CONNECTION_H

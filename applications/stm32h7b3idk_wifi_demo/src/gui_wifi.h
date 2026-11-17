@@ -1,6 +1,10 @@
 /**
  * @file gui_wifi.h
- * @brief LVGL user interface for Wi-Fi management.
+ * @brief Main Wi-Fi graphical interface and screen navigation.
+ *
+ * Provides functions for initializing the Wi-Fi user interface,
+ * managing screen transitions with PWM backlight animations,
+ * and displaying network interface information.
  */
 
 #ifndef GUI_WIFI_H
