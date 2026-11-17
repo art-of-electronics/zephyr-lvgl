@@ -48,6 +48,7 @@ zephyr-lvgl/
 ├── applications/
 │   ├── cyd_demo/
 │   ├── stm32h7b3idk_demo/
+│   ├── stm32h7b3idk_wifi_demo/
 │   └── viewe_demo/
 │
 ├── boards/
@@ -100,6 +101,7 @@ Each supported hardware family has a dedicated demonstration application contain
 |---|---|---|
 | `cyd_demo` | CYD ESP32-035 | [README](applications/cyd_demo/Readme.md) |
 | `stm32h7b3idk_demo` | STM32H7B3I-DK | [README](applications/stm32h7b3idk_demo/Readme.md) |
+| `stm32h7b3idk_wifi_demo` | STM32H7B3I-DK | [README](applications/stm32h7b3idk_wifi_demo/Readme.md) |
 | `viewe_demo` | VIEWE ESP32-S3 displays | [README](applications/viewe_demo/Readme.md) |
 
 Select the appropriate application and follow its documentation to build, flash, and test the target hardware.

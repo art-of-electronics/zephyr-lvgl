@@ -1,0 +1,33 @@
+#include <zephyr/dt-bindings/pinctrl/stm32-pinctrl.h>
+#include <zephyr/dt-bindings/pwm/pwm.h>
+
+/ {
+    backlight {
+        compatible = "pwm-leds";
+
+        lcd_backlight: lcd_backlight {
+            pwms = <&pwm2 2 50000 PWM_POLARITY_NORMAL>;
+            label = "LCD Backlight";
+        };
+    };
+};
+
+&pinctrl {
+    lcd_backlight_pwm_pin: lcd_backlight_pwm_pin {
+        pinmux = <STM32_PINMUX('A', 1, AF1)>;
+    };
+};
+
+&timers2 {
+    status = "okay";
+
+    pwm2: pwm {
+        status = "okay";
+        pinctrl-0 = <&lcd_backlight_pwm_pin>;
+        pinctrl-names = "default";
+    };
+};
+
+&ltdc {
+    /delete-property/ bl-ctrl-gpios;
+};
