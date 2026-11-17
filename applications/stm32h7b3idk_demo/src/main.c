@@ -19,8 +19,8 @@
 *****************************************************************************/
 LOG_MODULE_REGISTER(app_main, LOG_LEVEL_INF);
 
-#define MAIN_LOOP_PERIOD_MS (10U)
-#define PERF_PRINT_REPORT   (false)
+#define MAIN_LOOP_PERIOD_MS (2U)
+#define PERF_PRINT_REPORT   (true)
 #define ENABLE_BTN_ANIM     (false)
 
 

@@ -10,8 +10,6 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/version.h>
 
-#include <lvgl.h>
-
 #include <backlight.h>
 #include <display.h>
 #include <theme.h>

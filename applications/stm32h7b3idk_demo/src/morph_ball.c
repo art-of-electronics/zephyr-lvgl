@@ -183,7 +183,6 @@ static void update_impact_effect(uint32_t delta_ms)
     lv_obj_set_style_image_recolor_opa(ball, (lv_opa_t)opacity, 0);
 }
 
-
 static void animate(lv_timer_t *timer)
 {
     ARG_UNUSED(timer);
