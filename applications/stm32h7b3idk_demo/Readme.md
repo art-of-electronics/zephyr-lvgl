@@ -14,6 +14,12 @@ The implementation achieves **55 FPS** using LVGL partial refresh, double buffer
 
 ---
 
+## Screenshots
+
+![Demo](doc/img/demo.webp)
+
+---
+
 ## Hardware
 
 | Component | Description |
@@ -67,7 +73,7 @@ The application follows a modular architecture, separating display initializatio
 | `main.c` | Application initialization and main event loop |
 | `display.c/.h` | Display initialization and LVGL screen configuration |
 | `backlight.c/.h` | LCD backlight control and graphical button |
-| `morph_ball.c/.h` | Morph Ball animation, movement physics, and visual effects |
+| `morph_ball.c` | Morph Ball animation, movement physics, and visual effects |
 | `performance.c/.h` | FPS, APS, rendering, and synchronization measurements |
 | `theme.h` | Application color definitions |
 
@@ -168,7 +174,6 @@ Results were obtained with partial refresh, double buffering, DMA2D acceleration
 
 Actual performance may vary depending on rendering configuration, application workload, and compiler optimization.
 
-
 ---
 
 ## Build
@@ -203,59 +208,8 @@ The application uses the board's onboard ST-LINK debugger.
 
 ---
 
-## Project Structure
-
-```text
-stm32h7b3idk_demo/
-├── CMakeLists.txt
-├── prj.conf
-├── README.md
-├── assets/
-│   ├── morph_ball.c
-│   └── morph_ball.png
-└── src/
-    ├── backlight.c
-    ├── backlight.h
-    ├── display.c
-    ├── display.h
-    ├── main.c
-    ├── morph_ball.c
-    ├── morph_ball.h
-    ├── performance.c
-    ├── performance.h
-    └── theme.h
-```
-
-### Source Files
-
-| File | Description |
-|---|---|
-| `main.c` | Application initialization and event loop |
-| `display.c/.h` | LVGL display setup and version label |
-| `backlight.c/.h` | Backlight initialization and control |
-| `morph_ball.c/.h` | Animation logic and graphical effects |
-| `performance.c/.h` | Runtime performance measurements |
-| `theme.h` | Application color palette |
-| `assets/morph_ball.c` | LVGL-compatible image data |
-| `assets/morph_ball.png` | Original Morph Ball sprite |
-| `prj.conf` | Zephyr and LVGL configuration |
-
----
-
-## Notes
-
-The application demonstrates a native **Zephyr + LVGL** graphics stack on STM32H7 hardware.
-
-LTDC handles continuous display scanout, while LVGL manages the graphical interface, image transformations, and refresh scheduling.
-
-The Morph Ball rotation angle is calculated directly from its horizontal position, preventing cumulative rounding errors and keeping rotation synchronized with movement.
-
-The project intentionally avoids additional graphics frameworks and vendor-specific application layers.
-
----
-
 ## License
 
 See the repository's main license for details.
 
-*Metroid* and Samus Aran are trademarks and intellectual property of Nintendo. This is an unofficial, non-commercial technical demonstration and is not affiliated with or endorsed by Nintendo.
+*Metroid*, *Morph Ball* and *Samus Aran* are trademarks and intellectual property of Nintendo. This is an unofficial, non-commercial technical demonstration and is not affiliated with or endorsed by Nintendo.
