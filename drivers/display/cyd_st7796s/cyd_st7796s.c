@@ -1,3 +1,6 @@
+/*****************************************************************************
+                                    INCLUDES
+*****************************************************************************/
 #include "cyd_st7796s.h"
 
 #include <stddef.h>
@@ -9,6 +12,10 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/logging/log.h>
 
+
+/*****************************************************************************
+                          PRIVATE DEFINES / MACROS
+*****************************************************************************/
 LOG_MODULE_REGISTER(cyd_st7796s, LOG_LEVEL_INF);
 
 #define LCD_NODE            DT_CHOSEN(zephyr_display)
@@ -37,6 +44,19 @@ LOG_MODULE_REGISTER(cyd_st7796s, LOG_LEVEL_INF);
 #define LCD_CMD_DOCA        (0xE8U)
 #define LCD_CMD_DIC         (0xB4U)
 
+#define LCD_INIT_ARRAY(cmd, data_array) \
+    { (cmd), (data_array), sizeof(data_array) }
+
+#define LCD_INIT_VALUE(cmd, value) \
+    { (cmd), &(value), sizeof(value) }
+
+#define LCD_INIT_NO_DATA(cmd) \
+    { (cmd), NULL, 0U }
+
+
+/*****************************************************************************
+                     PRIVATE STRUCTS / ENUMS / VARIABLES
+*****************************************************************************/
 static const struct device *const lcd_dbi = DEVICE_DT_GET(DT_PARENT(LCD_NODE));
 static const struct mipi_dbi_config lcd_dbi_config = MIPI_DBI_CONFIG_DT(LCD_NODE, SPI_OP_MODE_CONTROLLER | SPI_WORD_SET(8), 0);
 static const uint8_t lcd_pgc[] = DT_PROP(LCD_NODE, pgc);
@@ -66,15 +86,6 @@ struct lcd_init_command {
     size_t length;
 };
 
-#define LCD_INIT_ARRAY(cmd, data_array) \
-    { (cmd), (data_array), sizeof(data_array) }
-
-#define LCD_INIT_VALUE(cmd, value) \
-    { (cmd), &(value), sizeof(value) }
-
-#define LCD_INIT_NO_DATA(cmd) \
-    { (cmd), NULL, 0U }
-
 static const struct lcd_init_command lcd_init_sequence[] = {
     LCD_INIT_VALUE(LCD_CMD_CSCON, lcd_unlock_1),
     LCD_INIT_VALUE(LCD_CMD_CSCON, lcd_unlock_2),
@@ -98,11 +109,23 @@ static const struct lcd_init_command lcd_init_sequence[] = {
     LCD_INIT_VALUE(LCD_CMD_MADCTL, lcd_madctl),
 };
 
+
+/*****************************************************************************
+                         PRIVATE FUNCTION DECLARATIONS
+*****************************************************************************/
+
+/*****************************************************************************
+                       PRIVATE FUNCTION IMPLEMENTATIONS
+*****************************************************************************/
 static int cyd_st7796s_send_cmd(uint8_t cmd, const uint8_t *data, size_t len)
 {
     return mipi_dbi_command_write(lcd_dbi, &lcd_dbi_config, cmd, data, len);
 }
 
+
+/*****************************************************************************
+                           INTERFACE IMPLEMENTATION
+*****************************************************************************/
 int cyd_st7796s_configure(void)
 {
     int ret = 0;
