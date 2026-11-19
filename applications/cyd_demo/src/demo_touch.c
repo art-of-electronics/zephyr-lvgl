@@ -1,9 +1,6 @@
 /**
  * @file demo_touch.c
  * @brief Optional raw XPT2046 input-event diagnostic logger.
- *
- * This legacy helper is not built by default. The normal touchscreen path
- * remains the Zephyr input driver integrated directly with LVGL.
  */
 
 /*****************************************************************************
