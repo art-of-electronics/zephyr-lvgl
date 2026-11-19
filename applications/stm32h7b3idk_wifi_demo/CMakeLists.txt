@@ -8,7 +8,9 @@ set(DTC_OVERLAY_FILE
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(stm32h7b3i_wifi_demo)
 
-target_include_directories(app PRIVATE src)
+target_include_directories(app PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 
 target_sources(app PRIVATE 
     src/main.c
