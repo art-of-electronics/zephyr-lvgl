@@ -61,13 +61,20 @@ list(
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(cyd_demo)
 
-target_include_directories(app PRIVATE src)
+target_include_directories(app PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 
 target_sources(app PRIVATE 
     src/main.c
-    src/demo_rgb.c
-    src/demo_lcd.c
-    #src/demo_touch.c
+    src/display.c
+    src/gui.c
+    src/backlight.c
+    src/rgb_led.c
+    src/ldr.c
+    src/pwm_utils.c
+    # Optional legacy raw-touch diagnostics, disabled by default:
+    # src/demo_touch.c
 )
 
 set(external_project_cflags
