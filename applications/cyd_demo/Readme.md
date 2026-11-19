@@ -8,6 +8,14 @@ The application demonstrates the integration of custom board support, display dr
 
 ---
 
+## Screenshots
+
+| Portrait (180°) | Landscape (90°) |
+|:---:|:---:|
+| ![Demo](doc/img/portrait.webp) | ![Demo](doc/img/landscape.webp) |
+
+---
+
 ## Hardware
 
 | Component | Description |
@@ -311,27 +319,6 @@ The application has been tested on the CYD ESP32-035 with Zephyr RTOS 4.5.0.
 | PWM backlight | ✅ |
 | ADC / LDR measurements | ✅ |
 | LDR sensitivity in normal lighting | ⚠️ Hardware limitation |
-
----
-
-## Project Structure
-
-```text
-zephyr-lvgl/
-├── applications/
-│   └── cyd_demo/
-│       ├── CMakeLists.txt
-│       ├── prj.conf
-│       └── README.md
-│
-└── boards/
-    └── cyd/
-        └── esp32_035/
-```
-
-The application demonstrates the hardware interfaces provided by the custom board definition.
-
-Board-specific hardware configuration is maintained separately from the application whenever possible.
 
 ---
 
