@@ -4,6 +4,10 @@ LVGL demonstration application for **VIEWE ESP32-S3 RGB display boards**, using 
 
 The application supports two display sizes. CMake selects the appropriate demo entry point for the Zephyr board target; both variants share the same display driver and stress-test module.
 
+## Screenshots
+
+![Demo](doc/img/demo.webp) 
+
 ## Supported hardware
 
 | Board / PCB marking | PCB revision | Display | Demo entry point | Validation |
