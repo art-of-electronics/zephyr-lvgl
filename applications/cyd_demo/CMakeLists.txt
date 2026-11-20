@@ -76,7 +76,3 @@ target_sources(app PRIVATE
     # Optional legacy raw-touch diagnostics, disabled by default:
     # src/demo_touch.c
 )
-
-set(external_project_cflags
-    "${includes} ${definitions} ${options} ${system_includes} -DDISABLE_AUTOMATIC_FW_UPDATE"
-)

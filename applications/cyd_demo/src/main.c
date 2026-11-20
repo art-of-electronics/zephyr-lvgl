@@ -1,9 +1,6 @@
 /**
  * @file main.c
  * @brief Application entry point for the CYD ESP32-035 demo.
- *
- * Starts the independent RGB and display threads and periodically samples
- * the ambient light sensor. Peripheral implementations live in their modules.
  */
 
 /*****************************************************************************
