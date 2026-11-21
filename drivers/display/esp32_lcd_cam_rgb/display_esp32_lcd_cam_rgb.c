@@ -1159,7 +1159,6 @@ static int esp32_lcd_cam_rgb_init(const struct device *dev)
 	int ret = -1;
 
 	data->pixel_format = PIXEL_FORMAT_RGB_565X;
-	//data->orientation = DISPLAY_ORIENTATION_NORMAL;
 	data->orientation = LCD_INITIAL_ORIENTATION;
 	data->front_idx = 0U;
 	data->back_idx = (1U < LCD_FRAMEBUFFER_COUNT) ? (1U) : (0U);
