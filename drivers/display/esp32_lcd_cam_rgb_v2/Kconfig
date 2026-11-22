@@ -1,0 +1,22 @@
+choice ESP32_LCD_RGB_BACKEND
+    prompt "ESP32-S3 LCD_CAM RGB backend"
+    depends on ESP32_LCD_CAM_RGB
+    default ESP32_LCD_RGB_BACKEND_V1
+    help
+      Select the legacy v1 driver or the Requiem v2 driver.
+      The backends own the same devicetree display instance and are mutually exclusive.
+
+config ESP32_LCD_RGB_BACKEND_V1
+    bool "Legacy v1: LVGL, framebuffer presentation and CPU bounce refill"
+
+config ESP32_LCD_RGB_BACKEND_V2
+    bool "Requiem v2: triple PSRAM frames and partial display writes"
+
+endchoice
+
+config ESP32_LCD_RGB_V2_STATS
+    bool "Log v2 scanout counters once per second"
+    default y
+    depends on ESP32_LCD_RGB_BACKEND_V2 && LOG
+    help
+      Statistics are collected in the interrupts but emitted from a worker.
